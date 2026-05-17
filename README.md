@@ -100,7 +100,6 @@ spec:
   agents:
     - name: k8s-architect
       runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
-      model: claude-sonnet-4-6
       instructions: "You are a Kubernetes architect..."
       visibility: workspace
       maxConcurrentTasks: 3

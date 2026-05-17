@@ -46,7 +46,6 @@ spec:
     - name: k8s-architect
       description: "Kubernetes platform architect"
       runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
-      model: claude-sonnet-4-6
       instructions: |
         You are a Kubernetes architect. You plan infrastructure changes,
         review manifests, and guide the platform team.
@@ -58,7 +57,6 @@ spec:
     - name: frontend-lead
       description: "Frontend team lead"
       runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
-      model: claude-sonnet-4-6
       instructions: |
         You are a senior frontend engineer. Review React code, enforce
         accessibility standards, and mentor junior devs.
@@ -70,7 +68,6 @@ spec:
     - name: backend-lead
       description: "Backend team lead"
       runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
-      model: claude-opus-4-6
       instructions: |
         You are a backend architect. Design APIs, review database schemas,
         and ensure system reliability.

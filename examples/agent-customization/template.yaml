@@ -16,7 +16,6 @@ spec:
     - name: customized-coder
       description: "Agent with custom CLI args and environment variables"
       runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
-      model: claude-sonnet-4-6
       instructions: |
         You are a coding agent with customized runtime behavior.
         Use the provided custom args and environment variables.
