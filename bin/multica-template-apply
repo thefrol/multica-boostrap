@@ -362,7 +362,60 @@ def apply_skills(spec, registry, dry_run=False, workspace_id=None):
             _run_cmd(fcmd, dry_run=dry_run, workspace_id=workspace_id)
 
 
+def get_available_runtimes(workspace_id=None):
+    """Return list of available runtime dicts in the target workspace."""
+    cmd = ["multica", "runtime", "list", "--output", "json"]
+    if workspace_id:
+        cmd = cmd + ["--workspace-id", workspace_id]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return []
+    stdout = result.stdout.strip()
+    if not stdout:
+        return []
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def _resolve_runtime_id(agent, available_runtimes):
+    """Validate agent runtimeId and fall back to first available if invalid."""
+    name = agent["name"]
+    requested = agent.get("runtimeId")
+
+    valid_ids = {r.get("id") for r in available_runtimes if r.get("id")}
+
+    if requested and requested in valid_ids:
+        return requested
+
+    if available_runtimes:
+        fallback = available_runtimes[0].get("id")
+        if requested:
+            print(
+                f"[agent] {name} — WARNING: runtimeId {requested!r} not found in target workspace, falling back to {fallback!r}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[agent] {name} — WARNING: no runtimeId specified, falling back to {fallback!r}",
+                file=sys.stderr,
+            )
+        return fallback
+
+    print(
+        f"[agent] {name} — ERROR: no runtimes available in target workspace",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def apply_agents(spec, registry, dry_run=False, workspace_id=None):
+    available_runtimes = get_available_runtimes(workspace_id=workspace_id)
+
     for agent in spec.get("agents") or []:
         name = agent["name"]
         key = ("agent", name)
@@ -374,7 +427,8 @@ def apply_agents(spec, registry, dry_run=False, workspace_id=None):
             cmd.append(registry[key])
         cmd.extend(_flag("--name", name))
         cmd.extend(_flag("--description", agent.get("description")))
-        cmd.extend(_flag("--runtime-id", agent.get("runtimeId")))
+        resolved_runtime = _resolve_runtime_id(agent, available_runtimes)
+        cmd.extend(_flag("--runtime-id", resolved_runtime))
         cmd.extend(_flag("--model", agent.get("model")))
         cmd.extend(_flag("--instructions", agent.get("instructions")))
         cmd.extend(_flag("--visibility", agent.get("visibility")))
