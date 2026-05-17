@@ -18,6 +18,20 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
+# YAML customisation — multiline strings as literal blocks
+# ---------------------------------------------------------------------------
+
+def _str_representer(dumper, data):
+    """Use literal block style (|) for strings containing newlines."""
+    if '\n' in data:
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+
+yaml.add_representer(str, _str_representer)
+
+
+# ---------------------------------------------------------------------------
 # Workspace resolution
 # ---------------------------------------------------------------------------
 
