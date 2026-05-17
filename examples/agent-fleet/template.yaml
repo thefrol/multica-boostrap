@@ -44,7 +44,6 @@ spec:
     - name: auto-coder
       description: "Autonomous coding agent"
       runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
-      model: claude-sonnet-4-6
       instructions: |
         You are an autonomous coding agent. Write clean, tested code.
         Always commit your changes.
@@ -56,7 +55,6 @@ spec:
     - name: security-guardian
       description: "Security review agent"
       runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
-      model: claude-opus-4-6
       instructions: |
         You are a security-focused code reviewer.
         Always check for: SQL injection, XSS, CSRF, and insecure deserialization.
