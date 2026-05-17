@@ -68,8 +68,7 @@ multica-template-space/
 │   ├── agent-fleet/          # Multiple agents with skills
 │   ├── create-workspace/     # Create a new workspace from a template
 │   ├── full-stack/           # Agents + squads + autopilots
-│   ├── target-workspace/     # Apply to a specific workspace by name
-│   └── template-space/       # Production-ready product team template
+│   └── target-workspace/     # Apply to a specific workspace by name
 └── bin/
     └── multica-template-apply  # Engine executable (see IMPLEMENTATION.md)
 ```
