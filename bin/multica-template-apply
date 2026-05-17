@@ -392,26 +392,38 @@ def get_available_runtimes(workspace_id=None):
     return []
 
 
+def _runtime_label(runtime):
+    """Return a human-readable label for a runtime dict."""
+    if not runtime:
+        return "unknown"
+    parts = [runtime.get("name") or runtime.get("id", "unknown")]
+    provider = runtime.get("provider")
+    if provider:
+        parts.append(f"provider={provider}")
+    return " ".join(parts)
+
+
 def _resolve_runtime_id(agent, available_runtimes):
     """Validate agent runtimeId and fall back to first available if invalid."""
     name = agent["name"]
     requested = agent.get("runtimeId")
 
-    valid_ids = {r.get("id") for r in available_runtimes if r.get("id")}
+    runtime_by_id = {r.get("id"): r for r in available_runtimes if r.get("id")}
 
-    if requested and requested in valid_ids:
+    if requested and requested in runtime_by_id:
         return requested
 
     if available_runtimes:
         fallback = available_runtimes[0].get("id")
+        fallback_label = _runtime_label(available_runtimes[0])
         if requested:
             print(
-                f"[agent] {name} — WARNING: runtimeId {requested!r} not found in target workspace, falling back to {fallback!r}",
+                f"[agent] {name} — WARNING: runtimeId {requested!r} not found in target workspace, falling back to {fallback!r} ({fallback_label})",
                 file=sys.stderr,
             )
         else:
             print(
-                f"[agent] {name} — WARNING: no runtimeId specified, falling back to {fallback!r}",
+                f"[agent] {name} — WARNING: no runtimeId specified, falling back to {fallback!r} ({fallback_label})",
                 file=sys.stderr,
             )
         return fallback
@@ -431,7 +443,9 @@ def apply_agents(spec, registry, dry_run=False, workspace_id=None):
         key = ("agent", name)
         exists = key in registry
         action = "updating" if exists else "creating"
-        print(f"[agent] {name} — {action}")
+        model = agent.get("model")
+        model_hint = f" model={model}" if model else ""
+        print(f"[agent] {name} — {action}{model_hint}")
         cmd = ["multica", "agent", "update" if exists else "create", "--output", "json"]
         if exists:
             cmd.append(registry[key])
