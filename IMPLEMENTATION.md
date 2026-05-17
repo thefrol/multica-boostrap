@@ -61,7 +61,7 @@ def load_template(directory):
 
 ## Step 0 — Resolve Target Workspace
 
-**Input:** CLI args (`--workspace-id`, `--workspace-name`) + parsed template.
+**Input:** CLI args (`--workspace-id`, `--workspace-name`, `--create-workspace`) + parsed template.
 **Output:** A workspace UUID (or `None` for current workspace).
 
 **Precedence:**
@@ -73,10 +73,31 @@ def load_template(directory):
 ```bash
 multica workspace list   # outputs a table: ID  NAME
 ```
-Parse the table, look up the name, return the UUID. If not found, fail fast:
+Parse the table, look up the name, return the UUID. If not found:
+- If `--create-workspace` is set or `spec.targetWorkspace.create` is `true`,
+  create the workspace via the REST API (`POST /api/workspaces`).
+- Otherwise, fail fast:
+  ```
+  Workspace "X" not found. Create it via the web UI first.
+  ```
+
+**Workspace creation API call:**
+```python
+import urllib.request
+import json
+import os
+
+req = urllib.request.Request(
+    f"{os.environ['MULTICA_SERVER_URL']}/api/workspaces",
+    data=json.dumps({"name": name, "slug": slug}).encode(),
+    headers={
+        "Authorization": f"Bearer {os.environ['MULTICA_TOKEN']}",
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
 ```
-Workspace "X" not found. Create it via the web UI first.
-```
+The slug is auto-generated from the name if not provided in `spec.targetWorkspace.slug`.
 
 ## Step 1 — Parse the Template
 
@@ -89,7 +110,7 @@ Workspace "X" not found. Create it via the web UI first.
 - `metadata.name` is required
 - `spec` is required
 - Unknown keys at any level should raise a clear error
-- `spec.targetWorkspace` is optional; if present, may contain `id` or `name`
+- `spec.targetWorkspace` is optional; if present, may contain `id`, `name`, `create`, or `slug`
 
 **Code sketch:**
 ```python

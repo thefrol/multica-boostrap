@@ -16,6 +16,8 @@ spec:
   targetWorkspace:
     id: string            # Explicit workspace UUID.
     name: string          # Resolve workspace name to ID via `multica workspace list`.
+    create: boolean       # If true and the workspace is not found, create it via API.
+    slug: string          # Optional slug for the new workspace (auto-generated from name if omitted).
 
   # ---------------------------------------------------------------------------
   # WORKSPACE METADATA

@@ -12,8 +12,10 @@ Usage:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import urllib.request
 
 import yaml
 
@@ -26,8 +28,9 @@ TOP_LEVEL_KEYS = {"apiVersion", "kind", "metadata", "spec"}
 METADATA_KEYS = {"name", "description"}
 SPEC_KEYS = {"targetWorkspace", "workspace", "labels", "skills", "agents", "squads", "autopilots"}
 
-TARGET_WORKSPACE_KEYS = {"id", "name"}
+TARGET_WORKSPACE_KEYS = {"id", "name", "create", "slug"}
 WORKSPACE_KEYS = {"name", "description", "issuePrefix"}
+CREATE_WORKSPACE_KEYS = {"name", "description", "slug"}
 LABEL_KEYS = {"name", "color"}
 SKILL_KEYS = {"name", "description", "content", "files"}
 SKILL_FILE_KEYS = {"path", "content"}
@@ -162,7 +165,57 @@ def _parse_workspace_list_table():
 DEFAULT_TEST_WORKSPACE = "b025515a-259e-4679-963d-35ba3fce947a"
 
 
-def resolve_workspace(args, template):
+def _slugify(name):
+    """Convert a workspace name to a URL-safe slug."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "workspace"
+
+
+def create_workspace(name, slug=None, description=None):
+    """Create a workspace via the Multica REST API."""
+    server = os.environ.get("MULTICA_SERVER_URL")
+    token = os.environ.get("MULTICA_TOKEN")
+    if not server or not token:
+        print(
+            "ERROR: MULTICA_SERVER_URL and MULTICA_TOKEN must be set to create a workspace.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    slug = slug or _slugify(name)
+    payload = {"name": name, "slug": slug}
+    if description:
+        payload["description"] = description
+
+    req = urllib.request.Request(
+        f"{server}/api/workspaces",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            ws_id = data.get("id")
+            print(f"  Created workspace: {name} ({ws_id})")
+            return ws_id
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        print(f"ERROR: Failed to create workspace '{name}': HTTP {e.code}", file=sys.stderr)
+        print(f"Response: {body}", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"ERROR: Failed to create workspace '{name}': {e.reason}", file=sys.stderr)
+        sys.exit(1)
+
+
+def resolve_workspace(args, template, dry_run=False):
     """Resolve target workspace according to precedence rules.
 
     Precedence:
@@ -180,6 +233,12 @@ def resolve_workspace(args, template):
         name = args.workspace_name
         workspaces = _parse_workspace_list_table()
         if name not in workspaces:
+            if args.create_workspace:
+                if dry_run:
+                    print(f'Workspace "{name}" not found. Would create (dry-run).')
+                    return DRY_RUN_ID
+                print(f'Workspace "{name}" not found. Creating...')
+                return create_workspace(name)
             print(
                 f'Workspace "{name}" not found. Create it via the web UI first.',
                 file=sys.stderr,
@@ -194,6 +253,15 @@ def resolve_workspace(args, template):
         name = target["name"]
         workspaces = _parse_workspace_list_table()
         if name not in workspaces:
+            if target.get("create") or args.create_workspace:
+                if dry_run:
+                    print(f'Workspace "{name}" not found. Would create (dry-run).')
+                    return DRY_RUN_ID
+                print(f'Workspace "{name}" not found. Creating...')
+                ws_description = None
+                if template.get("spec", {}).get("workspace", {}).get("description"):
+                    ws_description = template["spec"]["workspace"]["description"]
+                return create_workspace(name, slug=target.get("slug"), description=ws_description)
             print(
                 f'Workspace "{name}" not found. Create it via the web UI first.',
                 file=sys.stderr,
@@ -230,6 +298,8 @@ def _run_json(cmd, workspace_id=None):
 def build_registry(workspace_id=None):
     """Query the target workspace and build a (type, name) -> id registry."""
     registry = {}
+    if workspace_id == DRY_RUN_ID:
+        return registry
 
     ws = _run_json(["multica", "workspace", "get", "--output", "json"], workspace_id=workspace_id)
     if isinstance(ws, dict):
@@ -582,11 +652,12 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
     parser.add_argument("--workspace-id", help="Apply to an explicit workspace UUID")
     parser.add_argument("--workspace-name", help="Resolve workspace name to ID and apply there")
+    parser.add_argument("--create-workspace", action="store_true", help="Create the target workspace if it does not exist")
     args = parser.parse_args()
 
     template = load_template(args.directory)
 
-    target_ws = resolve_workspace(args, template)
+    target_ws = resolve_workspace(args, template, dry_run=args.dry_run)
     if target_ws:
         print(f"Target workspace: {target_ws}")
     else:

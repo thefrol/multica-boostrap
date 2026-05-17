@@ -1,0 +1,21 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: create-workspace-example
+  description: "Demonstrates creating a new workspace from a template"
+spec:
+  targetWorkspace:
+    name: "Created from Template"
+    create: true
+    slug: "created-from-template"
+
+  workspace:
+    name: "Created from Template"
+    description: "This workspace was provisioned entirely from a template"
+    issuePrefix: "CRT"
+
+  labels:
+    - name: provisioned
+      color: "#10b981"
+    - name: template
+      color: "#3b82f6"

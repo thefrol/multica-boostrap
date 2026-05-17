@@ -8,12 +8,6 @@ autopilots) from version-controlled YAML templates.
 
 ## Non-Goals
 
-- **Workspace creation** — The Multica CLI does not have a `workspace create`
-  command. Workspace creation must happen through the web UI (or `multica login`
-  auto-discovery). The engine operates *inside* an existing workspace.
-- Full Helm-style package management (templating with loops, conditionals,
-  sub-charts). Parameterized values are on the roadmap but out of scope for
-  v0.1.
 - Full Helm-style package management (templating with loops, conditionals,
   sub-charts). Parameterized values are on the roadmap but out of scope for
   v0.1.
@@ -52,6 +46,9 @@ Kubernetes-style API shape for familiarity.
 - Precedence: CLI flags override template fields.
 - If a target workspace is resolved, every `multica` command the engine runs
   gets prefixed with `--workspace-id <id>`.
+- If `targetWorkspace.create` is `true` (or `--create-workspace` is passed) and
+  the workspace is not found by name, the engine calls the REST API directly to
+  create the workspace before applying the rest of the template.
 
 **Phase 1 — Parse & Validate**
 - Read `template.yaml`.
@@ -138,7 +135,7 @@ The apply operation must be safe to run repeatedly. This is achieved by:
 | Reference to non-existent resource | Fail fast with clear message |
 | `multica` CLI error | Abort apply, print stderr, exit non-zero |
 | Network failure | Abort apply, rely on idempotency for retry |
-| Target workspace not found (by name) | Fail fast with: `Workspace "X" not found. Create it via the web UI first.` |
+| Target workspace not found (by name) | If `create` is enabled, create via API. Otherwise, fail fast with: `Workspace "X" not found. Create it via the web UI first.` |
 
 ## Target Workspace
 
@@ -211,6 +208,5 @@ are converged.
 3. **Git-based catalog** — `multica-template install github.com/org/templates/k8s-team`
 4. **State caching** — Cache `multica * list` results to speed up repeated
    applies.
-5. **Workspace creation** — If Multica adds a `workspace create` CLI command,
-   the engine can be extended to support it. Until then, workspace creation
-   remains a non-goal.
+5. **Workspace creation** — ✅ Implemented. The engine creates workspaces via
+   the REST API when `targetWorkspace.create: true` is set.
