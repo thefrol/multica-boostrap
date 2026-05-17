@@ -1,0 +1,27 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: update-existing
+  description: "Demonstrates updating existing resources (idempotency with changes)"
+spec:
+  workspace:
+    name: "Update Existing"
+    description: "Workspace for demonstrating resource updates"
+    issuePrefix: "UPD"
+
+  labels:
+    - name: bug
+      color: "#dc2626"
+    - name: feature
+      color: "#16a34a"
+
+  agents:
+    - name: auto-coder
+      description: "Autonomous coding agent"
+      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      model: claude-sonnet-4-6
+      instructions: |
+        You are an autonomous coding agent. Write clean, tested code.
+        Always commit your changes.
+      visibility: workspace
+      maxConcurrentTasks: 6

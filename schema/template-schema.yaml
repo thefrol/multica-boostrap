@@ -1,0 +1,85 @@
+# Multica Template Schema — v1
+# This document defines the structure of a template.yaml file.
+# It is both documentation and a machine-readable schema.
+
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: string          # Required. Template identifier (slug-friendly).
+  description: string   # Optional. Human-readable description.
+spec:
+  # ---------------------------------------------------------------------------
+  # WORKSPACE METADATA
+  # ---------------------------------------------------------------------------
+  # Updates the current workspace. All fields are optional; omitted fields
+  # are left unchanged.
+  workspace:
+    name: string            # New workspace name
+    description: string     # New workspace description
+    issuePrefix: string     # New issue prefix (e.g., "PROJ")
+
+  # ---------------------------------------------------------------------------
+  # LABELS
+  # ---------------------------------------------------------------------------
+  # Labels are created if they do not exist, or updated if they already exist.
+  labels:
+    - name: string          # Required. Unique within the workspace.
+      color: string         # Required. Hex color, e.g. "#3b82f6".
+
+  # ---------------------------------------------------------------------------
+  # SKILLS
+  # ---------------------------------------------------------------------------
+  # Skills are created or updated by name. Skill files are upserted after
+  # the skill itself is converged.
+  skills:
+    - name: string          # Required. Unique within the workspace.
+      description: string   # Optional.
+      content: string       # Optional. SKILL.md body (inline or multiline).
+      files:                # Optional. Additional files inside the skill.
+        - path: string      # Required. File path within the skill.
+          content: string   # Required. File content (inline or multiline).
+
+  # ---------------------------------------------------------------------------
+  # AGENTS
+  # ---------------------------------------------------------------------------
+  # Agents are created or updated by name. Skill names in the `skills` array
+  # are resolved to IDs at apply time.
+  agents:
+    - name: string                  # Required. Unique within the workspace.
+      description: string           # Optional.
+      runtimeId: string             # Required for create. Runtime UUID.
+      model: string                 # Optional. e.g. "claude-sonnet-4-6".
+      instructions: string          # Optional. Agent system instructions.
+      visibility: string            # Optional. "private" or "workspace".
+      maxConcurrentTasks: integer   # Optional. Default: 6.
+      customArgs:                   # Optional. JSON array of CLI arguments.
+        - string
+      customEnv:                    # Optional. JSON object of env vars.
+        key: value
+      skills:                       # Optional. List of skill names to assign.
+        - string
+
+  # ---------------------------------------------------------------------------
+  # SQUADS
+  # ---------------------------------------------------------------------------
+  # Squads are created or updated by name. The `leader` field is a symbolic
+  # reference to an agent name defined elsewhere in the template (or already
+  # present in the workspace).
+  squads:
+    - name: string          # Required. Unique within the workspace.
+      description: string   # Optional.
+      leader: string        # Required. Agent name (resolved to ID at apply).
+
+  # ---------------------------------------------------------------------------
+  # AUTOPILOTS
+  # ---------------------------------------------------------------------------
+  # Autopilots are created or updated by title. The `agent` field is a
+  # symbolic reference to an agent name.
+  autopilots:
+    - name: string          # Required. Used as the autopilot title.
+      title: string         # Optional. Display title (defaults to name).
+      agent: string         # Required. Agent name (resolved to ID at apply).
+      mode: string          # Required. "create_issue" or "run_only".
+      description: string   # Optional. Used as the task prompt.
+      priority: string      # Optional. "none", "low", "medium", "high", "urgent".
+      status: string        # Optional. "active" or "paused".

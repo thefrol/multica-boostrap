@@ -1,0 +1,18 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: basic-workspace
+  description: "Minimal example: rename a workspace and add labels"
+spec:
+  workspace:
+    name: "Basic Demo"
+    description: "A minimal workspace for demonstrating template application"
+    issuePrefix: "DEMO"
+
+  labels:
+    - name: bug
+      color: "#ef4444"
+    - name: feature
+      color: "#22c55e"
+    - name: docs
+      color: "#3b82f6"

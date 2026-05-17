@@ -1,0 +1,104 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: full-stack
+  description: "Full example: agents, squads, and autopilots"
+spec:
+  workspace:
+    name: "Full Stack Team"
+    description: "Complete team setup with squads and scheduled automations"
+    issuePrefix: "FULL"
+
+  labels:
+    - name: infra
+      color: "#0ea5e9"
+    - name: frontend
+      color: "#ec4899"
+    - name: backend
+      color: "#10b981"
+
+  skills:
+    - name: k8s-troubleshooting
+      description: "Kubernetes cluster debugging"
+      files:
+        - path: SKILL.md
+          content: |
+            # K8s Troubleshooting
+            1. Check node health: `kubectl get nodes`
+            2. Check events: `kubectl get events --sort-by='.lastTimestamp'`
+            3. Check pod logs: `kubectl logs <pod>`
+            4. Check resource limits and requests
+
+    - name: react-patterns
+      description: "React best practices"
+      files:
+        - path: SKILL.md
+          content: |
+            # React Patterns
+            - Prefer functional components
+            - Use hooks for state and side effects
+            - Keep components small and focused
+
+  agents:
+    - name: k8s-architect
+      description: "Kubernetes platform architect"
+      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      model: claude-sonnet-4-6
+      instructions: |
+        You are a Kubernetes architect. You plan infrastructure changes,
+        review manifests, and guide the platform team.
+      visibility: workspace
+      maxConcurrentTasks: 3
+      skills:
+        - k8s-troubleshooting
+
+    - name: frontend-lead
+      description: "Frontend team lead"
+      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      model: claude-sonnet-4-6
+      instructions: |
+        You are a senior frontend engineer. Review React code, enforce
+        accessibility standards, and mentor junior devs.
+      visibility: workspace
+      maxConcurrentTasks: 3
+      skills:
+        - react-patterns
+
+    - name: backend-lead
+      description: "Backend team lead"
+      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      model: claude-opus-4-6
+      instructions: |
+        You are a backend architect. Design APIs, review database schemas,
+        and ensure system reliability.
+      visibility: workspace
+      maxConcurrentTasks: 3
+
+  squads:
+    - name: platform-squad
+      description: "Platform engineering squad"
+      leader: k8s-architect
+
+    - name: product-squad
+      description: "Product development squad"
+      leader: frontend-lead
+
+  autopilots:
+    - name: daily-health-check
+      title: "Daily Cluster Health Check"
+      agent: k8s-architect
+      mode: create_issue
+      description: |
+        Run a daily health check on the Kubernetes cluster.
+        Check node status, pod restarts, and resource utilization.
+        Create an issue with findings and recommendations.
+      priority: high
+
+    - name: weekly-frontend-review
+      title: "Weekly Frontend Code Review"
+      agent: frontend-lead
+      mode: create_issue
+      description: |
+        Review all merged PRs in the frontend repository this week.
+        Focus on performance, accessibility, and test coverage.
+      priority: medium

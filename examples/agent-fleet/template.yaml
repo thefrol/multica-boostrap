@@ -1,0 +1,63 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: agent-fleet
+  description: "A fleet of specialized agents with shared skills"
+spec:
+  workspace:
+    name: "Agent Fleet"
+    description: "Workspace with a fleet of autonomous agents"
+    issuePrefix: "FLEET"
+
+  labels:
+    - name: auto
+      color: "#a855f7"
+    - name: review
+      color: "#f59e0b"
+
+  skills:
+    - name: code-review
+      description: "Guidelines for reviewing code changes"
+      files:
+        - path: SKILL.md
+          content: |
+            # Code Review Skill
+            - Check for tests
+            - Verify no secrets in code
+            - Ensure error handling is present
+
+    - name: security-audit
+      description: "Security-focused review guidelines"
+      files:
+        - path: SKILL.md
+          content: |
+            # Security Audit Skill
+            - SQL injection
+            - XSS
+            - CSRF
+            - Insecure deserialization
+
+  agents:
+    - name: auto-coder
+      description: "Autonomous coding agent"
+      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      model: claude-sonnet-4-6
+      instructions: |
+        You are an autonomous coding agent. Write clean, tested code.
+        Always commit your changes.
+      visibility: workspace
+      maxConcurrentTasks: 3
+      skills:
+        - code-review
+
+    - name: security-guardian
+      description: "Security review agent"
+      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      model: claude-opus-4-6
+      instructions: |
+        You are a security-focused code reviewer.
+        Always check for: SQL injection, XSS, CSRF, and insecure deserialization.
+      visibility: workspace
+      maxConcurrentTasks: 2
+      skills:
+        - security-audit

@@ -1,0 +1,34 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: skill-inline
+  description: "Demonstrates a skill using inline content instead of files"
+spec:
+  workspace:
+    name: "Skill Inline"
+    description: "Workspace demonstrating inline skill content"
+    issuePrefix: "SKILL"
+
+  skills:
+    - name: onboarding-guide
+      description: "New team member onboarding guide"
+      content: |
+        # Onboarding Guide
+
+        Welcome to the team! Here's what you need to know:
+
+        1. Set up your development environment using `./scripts/setup.sh`.
+        2. Read the [Team Handbook](https://wiki.example.com/handbook).
+        3. Join the `#dev` Slack channel.
+        4. Schedule a 1:1 with your buddy within the first week.
+
+        ## Code Review Process
+
+        - All changes must go through a pull request.
+        - Require at least one approval before merging.
+        - Run the full test suite before requesting review.
+
+        ## On-Call
+
+        - Primary on-call rotates weekly.
+        - Escalation path: Primary → Secondary → Manager.

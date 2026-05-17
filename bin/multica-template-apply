@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""
+multica-template-apply — Declarative workspace provisioning engine for Multica.
+
+Usage:
+    multica-template-apply ./examples/basic-workspace
+    multica-template-apply ./examples/agent-fleet --dry-run
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+import yaml
+
+
+# ---------------------------------------------------------------------------
+# Validation constants
+# ---------------------------------------------------------------------------
+
+TOP_LEVEL_KEYS = {"apiVersion", "kind", "metadata", "spec"}
+METADATA_KEYS = {"name", "description"}
+SPEC_KEYS = {"workspace", "labels", "skills", "agents", "squads", "autopilots"}
+
+WORKSPACE_KEYS = {"name", "description", "issuePrefix"}
+LABEL_KEYS = {"name", "color"}
+SKILL_KEYS = {"name", "description", "content", "files"}
+SKILL_FILE_KEYS = {"path", "content"}
+AGENT_KEYS = {
+    "name", "description", "runtimeId", "model", "instructions",
+    "visibility", "maxConcurrentTasks", "customArgs", "customEnv", "skills",
+}
+SQUAD_KEYS = {"name", "description", "leader"}
+AUTOPILOT_KEYS = {"name", "title", "agent", "mode", "description", "priority", "status"}
+
+DRY_RUN_ID = "DRY-RUN"
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def _validate_keys(obj, allowed, path):
+    if not isinstance(obj, dict):
+        raise ValueError(f"{path} must be a mapping")
+    unknown = set(obj.keys()) - allowed
+    if unknown:
+        raise ValueError(f"{path} contains unknown keys: {', '.join(sorted(unknown))}")
+
+
+def load_template(directory):
+    path = os.path.join(directory, "template.yaml")
+    if not os.path.isfile(path):
+        raise ValueError(f"template.yaml not found in {directory}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError("template.yaml must contain a mapping")
+
+    _validate_keys(data, TOP_LEVEL_KEYS, "template")
+
+    if data.get("apiVersion") != "multica.template/v1":
+        raise ValueError(
+            f"apiVersion must be 'multica.template/v1', got {data.get('apiVersion')!r}"
+        )
+    if data.get("kind") != "WorkspaceTemplate":
+        raise ValueError(
+            f"kind must be 'WorkspaceTemplate', got {data.get('kind')!r}"
+        )
+
+    metadata = data.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a mapping")
+    _validate_keys(metadata, METADATA_KEYS, "metadata")
+    if not metadata.get("name"):
+        raise ValueError("metadata.name is required")
+
+    spec = data.get("spec")
+    if not isinstance(spec, dict):
+        raise ValueError("spec is required and must be a mapping")
+    _validate_keys(spec, SPEC_KEYS, "spec")
+
+    # Validate sub-resources
+    if "workspace" in spec:
+        _validate_keys(spec["workspace"], WORKSPACE_KEYS, "spec.workspace")
+
+    for i, label in enumerate(spec.get("labels") or []):
+        _validate_keys(label, LABEL_KEYS, f"spec.labels[{i}]")
+        if not label.get("name"):
+            raise ValueError(f"spec.labels[{i}].name is required")
+
+    for i, skill in enumerate(spec.get("skills") or []):
+        _validate_keys(skill, SKILL_KEYS, f"spec.skills[{i}]")
+        if not skill.get("name"):
+            raise ValueError(f"spec.skills[{i}].name is required")
+        for j, sf in enumerate(skill.get("files") or []):
+            _validate_keys(sf, SKILL_FILE_KEYS, f"spec.skills[{i}].files[{j}]")
+
+    for i, agent in enumerate(spec.get("agents") or []):
+        _validate_keys(agent, AGENT_KEYS, f"spec.agents[{i}]")
+        if not agent.get("name"):
+            raise ValueError(f"spec.agents[{i}].name is required")
+
+    for i, squad in enumerate(spec.get("squads") or []):
+        _validate_keys(squad, SQUAD_KEYS, f"spec.squads[{i}]")
+        if not squad.get("name"):
+            raise ValueError(f"spec.squads[{i}].name is required")
+        if not squad.get("leader"):
+            raise ValueError(f"spec.squads[{i}].leader is required")
+
+    for i, autopilot in enumerate(spec.get("autopilots") or []):
+        _validate_keys(autopilot, AUTOPILOT_KEYS, f"spec.autopilots[{i}]")
+        if not autopilot.get("name"):
+            raise ValueError(f"spec.autopilots[{i}].name is required")
+        if not autopilot.get("agent"):
+            raise ValueError(f"spec.autopilots[{i}].agent is required")
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def _run_json(cmd):
+    """Run a multica command and return parsed JSON."""
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error running command: {' '.join(cmd)}", file=sys.stderr)
+        print(f"stderr: {result.stderr}", file=sys.stderr)
+        sys.exit(result.returncode)
+    stdout = result.stdout.strip()
+    if not stdout:
+        return None
+    return json.loads(stdout)
+
+
+def build_registry():
+    """Query the current workspace and build a (type, name) -> id registry."""
+    registry = {}
+
+    ws = _run_json(["multica", "workspace", "get", "--output", "json"])
+    if isinstance(ws, dict):
+        registry[("workspace", ws.get("name"))] = ws.get("id")
+
+    labels = _run_json(["multica", "label", "list", "--output", "json"])
+    if isinstance(labels, list):
+        for item in labels:
+            registry[("label", item.get("name"))] = item.get("id")
+
+    skills = _run_json(["multica", "skill", "list", "--output", "json"])
+    if isinstance(skills, list):
+        for item in skills:
+            registry[("skill", item.get("name"))] = item.get("id")
+
+    agents = _run_json(["multica", "agent", "list", "--output", "json"])
+    if isinstance(agents, list):
+        for item in agents:
+            registry[("agent", item.get("name"))] = item.get("id")
+
+    squads = _run_json(["multica", "squad", "list", "--output", "json"])
+    if isinstance(squads, list):
+        for item in squads:
+            registry[("squad", item.get("name"))] = item.get("id")
+
+    autopilots_resp = _run_json(["multica", "autopilot", "list", "--output", "json"])
+    autopilots = []
+    if isinstance(autopilots_resp, dict):
+        autopilots = autopilots_resp.get("autopilots", [])
+    elif isinstance(autopilots_resp, list):
+        autopilots = autopilots_resp
+    for item in autopilots:
+        key = item.get("title") or item.get("name")
+        if key:
+            registry[("autopilot", key)] = item.get("id")
+
+    return registry
+
+
+# ---------------------------------------------------------------------------
+# Execution helpers
+# ---------------------------------------------------------------------------
+
+def _run_cmd(cmd, dry_run=False):
+    """Run a multica command, or print it in dry-run mode."""
+    if dry_run:
+        print(f"  [dry-run] {' '.join(cmd)}")
+        return None
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error running command: {' '.join(cmd)}", file=sys.stderr)
+        print(f"stderr: {result.stderr}", file=sys.stderr)
+        sys.exit(result.returncode)
+    stdout = result.stdout.strip()
+    if stdout:
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError:
+            return stdout
+    return None
+
+
+def _flag(key, value):
+    if value is None:
+        return []
+    if isinstance(value, (list, dict)):
+        value = json.dumps(value)
+    return [key, str(value)]
+
+
+def _get_id(result):
+    if isinstance(result, dict):
+        return result.get("id")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Apply functions
+# ---------------------------------------------------------------------------
+
+def apply_workspace(spec, dry_run=False):
+    ws = spec.get("workspace")
+    if not ws:
+        return
+    print("[workspace] updating metadata")
+    cmd = ["multica", "workspace", "update", "--output", "json"]
+    cmd.extend(_flag("--name", ws.get("name")))
+    cmd.extend(_flag("--description", ws.get("description")))
+    cmd.extend(_flag("--issue-prefix", ws.get("issuePrefix")))
+    _run_cmd(cmd, dry_run=dry_run)
+
+
+def apply_labels(spec, registry, dry_run=False):
+    for label in spec.get("labels") or []:
+        name = label["name"]
+        key = ("label", name)
+        if key in registry:
+            print(f"[label] {name} — updating")
+            cmd = ["multica", "label", "update", registry[key], "--output", "json"]
+        else:
+            print(f"[label] {name} — creating")
+            cmd = ["multica", "label", "create", "--output", "json"]
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--color", label.get("color")))
+        result = _run_cmd(cmd, dry_run=dry_run)
+        if result:
+            registry[key] = _get_id(result)
+
+
+def apply_skills(spec, registry, dry_run=False):
+    for skill in spec.get("skills") or []:
+        name = skill["name"]
+        key = ("skill", name)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        print(f"[skill] {name} — {action}")
+        cmd = ["multica", "skill", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--description", skill.get("description")))
+        cmd.extend(_flag("--content", skill.get("content")))
+        result = _run_cmd(cmd, dry_run=dry_run)
+
+        skill_id = registry.get(key)
+        if not skill_id and dry_run:
+            skill_id = DRY_RUN_ID
+        elif result:
+            skill_id = _get_id(result) or skill_id
+        if skill_id:
+            registry[key] = skill_id
+
+        for sf in skill.get("files") or []:
+            print(f"[skill] {name} — upsert file {sf['path']}")
+            fcmd = ["multica", "skill", "files", "upsert", skill_id, "--output", "json"]
+            fcmd.extend(_flag("--path", sf["path"]))
+            fcmd.extend(_flag("--content", sf["content"]))
+            _run_cmd(fcmd, dry_run=dry_run)
+
+
+def apply_agents(spec, registry, dry_run=False):
+    for agent in spec.get("agents") or []:
+        name = agent["name"]
+        key = ("agent", name)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        print(f"[agent] {name} — {action}")
+        cmd = ["multica", "agent", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--description", agent.get("description")))
+        cmd.extend(_flag("--runtime-id", agent.get("runtimeId")))
+        cmd.extend(_flag("--model", agent.get("model")))
+        cmd.extend(_flag("--instructions", agent.get("instructions")))
+        cmd.extend(_flag("--visibility", agent.get("visibility")))
+        cmd.extend(_flag("--max-concurrent-tasks", agent.get("maxConcurrentTasks")))
+        cmd.extend(_flag("--custom-args", agent.get("customArgs")))
+        cmd.extend(_flag("--custom-env", agent.get("customEnv")))
+        result = _run_cmd(cmd, dry_run=dry_run)
+
+        agent_id = registry.get(key)
+        if not agent_id and dry_run:
+            agent_id = DRY_RUN_ID
+        elif result:
+            agent_id = _get_id(result) or agent_id
+        if agent_id:
+            registry[key] = agent_id
+
+    # Final pass: skill bindings
+    for agent in spec.get("agents") or []:
+        name = agent["name"]
+        skills = agent.get("skills") or []
+        if not skills:
+            continue
+        skill_ids = []
+        for skill_name in skills:
+            sk = ("skill", skill_name)
+            if sk not in registry:
+                print(
+                    f"[agent] {name} — ERROR: referenced skill '{skill_name}' not found",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            skill_ids.append(registry[sk])
+        agent_key = ("agent", name)
+        agent_id = registry.get(agent_key)
+        if not agent_id:
+            print(f"[agent] {name} — ERROR: agent ID not found after apply", file=sys.stderr)
+            sys.exit(1)
+        print(f"[agent] {name} — setting skills ({', '.join(skills)})")
+        cmd = ["multica", "agent", "skills", "set", agent_id, "--output", "json"]
+        cmd.extend(_flag("--skill-ids", ",".join(skill_ids)))
+        _run_cmd(cmd, dry_run=dry_run)
+
+
+def apply_squads(spec, registry, dry_run=False):
+    for squad in spec.get("squads") or []:
+        name = squad["name"]
+        leader_name = squad.get("leader")
+        if not leader_name:
+            print(f"[squad] {name} — ERROR: leader is required", file=sys.stderr)
+            sys.exit(1)
+        leader_key = ("agent", leader_name)
+        if leader_key not in registry:
+            print(
+                f"[squad] {name} — ERROR: leader agent '{leader_name}' not found",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        leader_id = registry[leader_key]
+        key = ("squad", name)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        print(f"[squad] {name} — {action}")
+        cmd = ["multica", "squad", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--leader", leader_id))
+        cmd.extend(_flag("--description", squad.get("description")))
+        result = _run_cmd(cmd, dry_run=dry_run)
+
+        squad_id = registry.get(key)
+        if not squad_id and dry_run:
+            squad_id = DRY_RUN_ID
+        elif result:
+            squad_id = _get_id(result) or squad_id
+        if squad_id:
+            registry[key] = squad_id
+
+
+def apply_autopilots(spec, registry, dry_run=False):
+    for autopilot in spec.get("autopilots") or []:
+        name = autopilot.get("name")
+        title = autopilot.get("title") or name
+        agent_name = autopilot.get("agent")
+        if not agent_name:
+            print(f"[autopilot] {title} — ERROR: agent is required", file=sys.stderr)
+            sys.exit(1)
+        agent_key = ("agent", agent_name)
+        if agent_key not in registry:
+            print(
+                f"[autopilot] {title} — ERROR: agent '{agent_name}' not found",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        agent_id = registry[agent_key]
+        key = ("autopilot", title)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        print(f"[autopilot] {title} — {action}")
+        cmd = ["multica", "autopilot", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--title", title))
+        cmd.extend(_flag("--agent", agent_id))
+        cmd.extend(_flag("--mode", autopilot.get("mode")))
+        cmd.extend(_flag("--description", autopilot.get("description")))
+        cmd.extend(_flag("--priority", autopilot.get("priority")))
+        cmd.extend(_flag("--status", autopilot.get("status")))
+        result = _run_cmd(cmd, dry_run=dry_run)
+
+        autopilot_id = registry.get(key)
+        if not autopilot_id and dry_run:
+            autopilot_id = DRY_RUN_ID
+        elif result:
+            autopilot_id = _get_id(result) or autopilot_id
+        if autopilot_id:
+            registry[key] = autopilot_id
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Apply a Multica workspace template.")
+    parser.add_argument("directory", help="Path to directory containing template.yaml")
+    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    args = parser.parse_args()
+
+    template = load_template(args.directory)
+    print(f"Template: {template['metadata']['name']}")
+    print("Building registry from current workspace state...")
+    registry = build_registry()
+    print("Applying resources...\n")
+    sys.stdout.flush()
+
+    spec = template.get("spec", {})
+    apply_workspace(spec, dry_run=args.dry_run)
+    apply_labels(spec, registry, dry_run=args.dry_run)
+    apply_skills(spec, registry, dry_run=args.dry_run)
+    apply_agents(spec, registry, dry_run=args.dry_run)
+    apply_squads(spec, registry, dry_run=args.dry_run)
+    apply_autopilots(spec, registry, dry_run=args.dry_run)
+
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()

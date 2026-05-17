@@ -1,0 +1,29 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: agent-customization
+  description: "Demonstrates customArgs and customEnv on an agent"
+spec:
+  workspace:
+    name: "Agent Customization"
+    description: "Workspace showing agent customArgs and customEnv"
+    issuePrefix: "CUST"
+
+  agents:
+    - name: customized-coder
+      description: "Agent with custom CLI args and environment variables"
+      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      model: claude-sonnet-4-6
+      instructions: |
+        You are a coding agent with customized runtime behavior.
+        Use the provided custom args and environment variables.
+      visibility: workspace
+      maxConcurrentTasks: 4
+      customArgs:
+        - "--temperature"
+        - "0.7"
+        - "--top-p"
+        - "0.95"
+      customEnv:
+        LOG_LEVEL: debug
+        API_TIMEOUT: "30"
