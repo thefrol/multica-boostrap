@@ -9,35 +9,39 @@ single YAML file.
 
 ```bash
 # Apply a template to the current workspace
-multica-template-apply ./examples/basic-workspace
+multica-template apply ./examples/basic-workspace
 
 # Dry-run to see what would change
-multica-template-apply ./examples/agent-fleet --dry-run
+multica-template apply ./examples/agent-fleet --dry-run
 
 # Apply to a specific workspace by ID or name
-multica-template-apply ./examples/basic-workspace --workspace-id <uuid>
-multica-template-apply ./examples/basic-workspace --workspace-name "Team Alpha"
+multica-template apply ./examples/basic-workspace --workspace-id <uuid>
+multica-template apply ./examples/basic-workspace --workspace-name "Team Alpha"
 
 # Create a new workspace from a template
-multica-template-apply ./examples/create-workspace
-multica-template-apply ./examples/create-workspace --workspace-name "My Team" --create-workspace
+multica-template apply ./examples/create-workspace
+multica-template apply ./examples/create-workspace --workspace-name "My Team" --create-workspace
 
 # Dump an existing workspace to a template file
-multica-template-dump ./exported-template
-multica-template-dump ./exported-template --workspace-name "Team Alpha"
+multica-template dump ./exported-template
+multica-template dump ./exported-template --workspace-name "Team Alpha"
+
+# Clone one workspace to another
+multica-template clone --from-name "Source Workspace" --to-name "New Workspace" --create-workspace
+multica-template clone --from-id <uuid> --to-id <uuid> --dry-run
 ```
 
 ## How It Works
 
 1. **Author** a `template.yaml` that describes your desired workspace state.
-2. **Run** `multica-template-apply <folder>` against the target workspace.
+2. **Run** `multica-template apply <folder>` against the target workspace.
 3. The engine reads the template, compares it with the current workspace state,
    and issues the minimum set of `multica` CLI commands to converge to the
 desired state.
 
 ## Dump Workspace Config
 
-The companion `multica-template-dump` command exports an existing workspace to a
+The companion `multica-template dump` command exports an existing workspace to a
 `template.yaml` file. This is useful for:
 
 - **Backing up** workspace configuration in git
@@ -46,15 +50,15 @@ The companion `multica-template-dump` command exports an existing workspace to a
 
 ```bash
 # Dump current workspace
-multica-template-dump ./my-template
+multica-template dump ./my-template
 
 # Dump a specific workspace by name
-multica-template-dump ./my-template --workspace-name "Team Alpha"
+multica-template dump ./my-template --workspace-name "Team Alpha"
 ```
 
 The dumped template uses symbolic names for all references (skills, agents, squad
 leaders, autopilot assignees) so it is fully portable and can be applied with
-`multica-template-apply`.
+`multica-template apply`.
 
 ## The ID Problem — Solved
 
@@ -95,8 +99,9 @@ multica-template-space/
 │   ├── full-stack/           # Agents + squads + autopilots
 │   └── target-workspace/     # Apply to a specific workspace by name
 └── bin/
-    ├── multica-template-apply  # Engine executable (see IMPLEMENTATION.md)
-    └── multica-template-dump   # Export workspace to template.yaml
+    ├── multica-template          # Unified CLI entry point
+    ├── multica-template-apply    # Backward-compatible wrapper for 'apply'
+    └── multica-template-dump     # Backward-compatible wrapper for 'dump'
 ```
 
 ## Template Example
@@ -159,8 +164,8 @@ CLI context). You can override this in three ways:
 ### 1. CLI Flags (highest precedence)
 
 ```bash
-multica-template-apply ./examples/basic-workspace --workspace-id <uuid>
-multica-template-apply ./examples/basic-workspace --workspace-name "Team Alpha"
+multica-template apply ./examples/basic-workspace --workspace-id <uuid>
+multica-template apply ./examples/basic-workspace --workspace-name "Team Alpha"
 ```
 
 ### 2. Template Field
@@ -194,7 +199,7 @@ Workspace "X" not found. Create it via the web UI first.
 You can override this and create the workspace on the fly:
 
 ```bash
-multica-template-apply ./examples/create-workspace --workspace-name "New Team" --create-workspace
+multica-template apply ./examples/create-workspace --workspace-name "New Team" --create-workspace
 ```
 
 Or declare it in the template:
@@ -216,7 +221,7 @@ accidental changes to production workspaces during development and testing.
 ### Policy
 
 1. **Never apply templates to a production workspace without explicit review.**
-2. **Always verify the target workspace before running `multica-template-apply`.**
+2. **Always verify the target workspace before running `multica-template apply`.**
 3. **Use `MULTICA_WORKSPACE_ID` or `--workspace-id` to override the default target.**
 
 ### Default Target Behavior
@@ -237,13 +242,13 @@ the engine automatically applies changes to the designated test workspace.
 
 ```bash
 export MULTICA_WORKSPACE_ID="b025515a-259e-4679-963d-35ba3fce947a"
-multica-template-apply ./examples/basic-workspace
+multica-template apply ./examples/basic-workspace
 ```
 
 #### Via CLI flag (recommended for one-off runs)
 
 ```bash
-multica-template-apply ./examples/basic-workspace --workspace-id <uuid>
+multica-template apply ./examples/basic-workspace --workspace-id <uuid>
 ```
 
 #### Via template field
@@ -259,7 +264,7 @@ spec:
 Always use `--dry-run` to preview changes before applying:
 
 ```bash
-multica-template-apply ./examples/full-stack --dry-run
+multica-template apply ./examples/full-stack --dry-run
 ```
 
 ## Roadmap

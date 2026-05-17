@@ -1,0 +1,1231 @@
+#!/usr/bin/env python3
+"""
+multica-template — Unified CLI for declarative workspace provisioning.
+
+Subcommands:
+    apply   Apply a workspace template
+    dump    Export a workspace to a declarative template
+    clone   Copy one workspace to another (dump + apply)
+
+Usage:
+    multica-template apply ./examples/basic-workspace
+    multica-template apply ./examples/agent-fleet --dry-run
+    multica-template dump ./exported-template
+    multica-template clone --from-id <uuid> --to-name "New Team" --create-workspace
+"""
+
+import argparse
+import atexit
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+import yaml
+
+
+# ---------------------------------------------------------------------------
+# YAML customisation — multiline strings as literal blocks
+# ---------------------------------------------------------------------------
+
+def _str_representer(dumper, data):
+    """Use literal block style (|) for strings containing newlines."""
+    if '\n' in data:
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+
+yaml.add_representer(str, _str_representer)
+
+
+# ---------------------------------------------------------------------------
+# Common helpers
+# ---------------------------------------------------------------------------
+
+def _run_json(cmd, workspace_id=None):
+    """Run a multica command and return parsed JSON."""
+    if workspace_id:
+        cmd = cmd + ["--workspace-id", workspace_id]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error running command: {' '.join(cmd)}", file=sys.stderr)
+        print(f"stderr: {result.stderr}", file=sys.stderr)
+        sys.exit(result.returncode)
+    stdout = result.stdout.strip()
+    if not stdout:
+        return None
+    return json.loads(stdout)
+
+
+def _run_cmd(cmd, dry_run=False, workspace_id=None):
+    """Run a multica command, or print it in dry-run mode."""
+    if workspace_id:
+        cmd = cmd + ["--workspace-id", workspace_id]
+    if dry_run:
+        print(f"  [dry-run] {' '.join(cmd)}")
+        return None
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error running command: {' '.join(cmd)}", file=sys.stderr)
+        print(f"stderr: {result.stderr}", file=sys.stderr)
+        sys.exit(result.returncode)
+    stdout = result.stdout.strip()
+    if stdout:
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError:
+            return stdout
+    return None
+
+
+def _flag(key, value):
+    if value is None:
+        return []
+    if isinstance(value, (list, dict)):
+        value = json.dumps(value)
+    return [key, str(value)]
+
+
+def _get_id(result):
+    if isinstance(result, dict):
+        return result.get("id")
+    return None
+
+
+def _parse_workspace_list_table():
+    """Run 'multica workspace list' and parse the ID/NAME table."""
+    result = subprocess.run(
+        ["multica", "workspace", "list"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"Error running command: multica workspace list", file=sys.stderr)
+        print(f"stderr: {result.stderr}", file=sys.stderr)
+        sys.exit(result.returncode)
+
+    lines = result.stdout.strip().splitlines()
+    workspaces = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("ID"):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) >= 2:
+            ws_id = parts[0]
+            ws_name = parts[1]
+            workspaces[ws_name] = ws_id
+    return workspaces
+
+
+def _slugify(name):
+    """Convert a workspace name to a URL-safe slug."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "workspace"
+
+
+def create_workspace(name, slug=None, description=None):
+    """Create a workspace via the Multica REST API."""
+    server = os.environ.get("MULTICA_SERVER_URL")
+    token = os.environ.get("MULTICA_TOKEN")
+    if not server or not token:
+        print(
+            "ERROR: MULTICA_SERVER_URL and MULTICA_TOKEN must be set to create a workspace.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    slug = slug or _slugify(name)
+    payload = {"name": name, "slug": slug}
+    if description:
+        payload["description"] = description
+
+    req = urllib.request.Request(
+        f"{server}/api/workspaces",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            ws_id = data.get("id")
+            print(f"  Created workspace: {name} ({ws_id})")
+            return ws_id
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        print(f"ERROR: Failed to create workspace '{name}': HTTP {e.code}", file=sys.stderr)
+        print(f"Response: {body}", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"ERROR: Failed to create workspace '{name}': {e.reason}", file=sys.stderr)
+        sys.exit(1)
+
+
+# Test workspace UUID used as the default target for all template operations.
+DRY_RUN_ID = "DRY-RUN"
+DEFAULT_TEST_WORKSPACE = "b025515a-259e-4679-963d-35ba3fce947a"
+
+
+# ---------------------------------------------------------------------------
+# Validation constants
+# ---------------------------------------------------------------------------
+
+TOP_LEVEL_KEYS = {"apiVersion", "kind", "metadata", "spec"}
+METADATA_KEYS = {"name", "description"}
+SPEC_KEYS = {"targetWorkspace", "workspace", "labels", "skills", "agents", "squads", "autopilots"}
+
+TARGET_WORKSPACE_KEYS = {"id", "name", "create", "slug"}
+WORKSPACE_KEYS = {"name", "description", "issuePrefix"}
+CREATE_WORKSPACE_KEYS = {"name", "description", "slug"}
+LABEL_KEYS = {"name", "color"}
+SKILL_KEYS = {"name", "description", "content", "files"}
+SKILL_FILE_KEYS = {"path", "content"}
+AGENT_KEYS = {
+    "name", "description", "runtimeId", "model", "instructions",
+    "visibility", "maxConcurrentTasks", "customArgs", "customEnv", "skills",
+}
+SQUAD_KEYS = {"name", "description", "leader"}
+AUTOPILOT_KEYS = {"name", "title", "agent", "mode", "description", "priority", "status"}
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def _validate_keys(obj, allowed, path):
+    if not isinstance(obj, dict):
+        raise ValueError(f"{path} must be a mapping")
+    unknown = set(obj.keys()) - allowed
+    if unknown:
+        raise ValueError(f"{path} contains unknown keys: {', '.join(sorted(unknown))}")
+
+
+def load_template(directory):
+    path = os.path.join(directory, "template.yaml")
+    if not os.path.isfile(path):
+        raise ValueError(f"template.yaml not found in {directory}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError("template.yaml must contain a mapping")
+
+    _validate_keys(data, TOP_LEVEL_KEYS, "template")
+
+    if data.get("apiVersion") != "multica.template/v1":
+        raise ValueError(
+            f"apiVersion must be 'multica.template/v1', got {data.get('apiVersion')!r}"
+        )
+    if data.get("kind") != "WorkspaceTemplate":
+        raise ValueError(
+            f"kind must be 'WorkspaceTemplate', got {data.get('kind')!r}"
+        )
+
+    metadata = data.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a mapping")
+    _validate_keys(metadata, METADATA_KEYS, "metadata")
+    if not metadata.get("name"):
+        raise ValueError("metadata.name is required")
+
+    spec = data.get("spec")
+    if not isinstance(spec, dict):
+        raise ValueError("spec is required and must be a mapping")
+    _validate_keys(spec, SPEC_KEYS, "spec")
+
+    # Validate sub-resources
+    if "targetWorkspace" in spec:
+        _validate_keys(spec["targetWorkspace"], TARGET_WORKSPACE_KEYS, "spec.targetWorkspace")
+
+    if "workspace" in spec:
+        _validate_keys(spec["workspace"], WORKSPACE_KEYS, "spec.workspace")
+
+    for i, label in enumerate(spec.get("labels") or []):
+        _validate_keys(label, LABEL_KEYS, f"spec.labels[{i}]")
+        if not label.get("name"):
+            raise ValueError(f"spec.labels[{i}].name is required")
+
+    for i, skill in enumerate(spec.get("skills") or []):
+        _validate_keys(skill, SKILL_KEYS, f"spec.skills[{i}]")
+        if not skill.get("name"):
+            raise ValueError(f"spec.skills[{i}].name is required")
+        for j, sf in enumerate(skill.get("files") or []):
+            _validate_keys(sf, SKILL_FILE_KEYS, f"spec.skills[{i}].files[{j}]")
+
+    for i, agent in enumerate(spec.get("agents") or []):
+        _validate_keys(agent, AGENT_KEYS, f"spec.agents[{i}]")
+        if not agent.get("name"):
+            raise ValueError(f"spec.agents[{i}].name is required")
+
+    for i, squad in enumerate(spec.get("squads") or []):
+        _validate_keys(squad, SQUAD_KEYS, f"spec.squads[{i}]")
+        if not squad.get("name"):
+            raise ValueError(f"spec.squads[{i}].name is required")
+        if not squad.get("leader"):
+            raise ValueError(f"spec.squads[{i}].leader is required")
+
+    for i, autopilot in enumerate(spec.get("autopilots") or []):
+        _validate_keys(autopilot, AUTOPILOT_KEYS, f"spec.autopilots[{i}]")
+        if not autopilot.get("name"):
+            raise ValueError(f"spec.autopilots[{i}].name is required")
+        if not autopilot.get("agent"):
+            raise ValueError(f"spec.autopilots[{i}].agent is required")
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Workspace resolution
+# ---------------------------------------------------------------------------
+
+def resolve_workspace(args, template=None, dry_run=False):
+    """Resolve target workspace according to precedence rules.
+
+    Precedence:
+        --workspace-id > --workspace-name > spec.targetWorkspace.id >
+        spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var >
+        DEFAULT_TEST_WORKSPACE
+    """
+    spec = (template.get("spec") or {}) if template else {}
+    target = spec.get("targetWorkspace") or {}
+
+    if getattr(args, "workspace_id", None):
+        return args.workspace_id
+
+    if getattr(args, "workspace_name", None):
+        name = args.workspace_name
+        workspaces = _parse_workspace_list_table()
+        if name not in workspaces:
+            if getattr(args, "create_workspace", False):
+                if dry_run:
+                    print(f'Workspace "{name}" not found. Would create (dry-run).')
+                    return DRY_RUN_ID
+                print(f'Workspace "{name}" not found. Creating...')
+                return create_workspace(name)
+            print(
+                f'Workspace "{name}" not found. Create it via the web UI first.',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return workspaces[name]
+
+    if target.get("id"):
+        return target["id"]
+
+    if target.get("name"):
+        name = target["name"]
+        workspaces = _parse_workspace_list_table()
+        if name not in workspaces:
+            if target.get("create") or getattr(args, "create_workspace", False):
+                if dry_run:
+                    print(f'Workspace "{name}" not found. Would create (dry-run).')
+                    return DRY_RUN_ID
+                print(f'Workspace "{name}" not found. Creating...')
+                ws_description = None
+                if template and template.get("spec", {}).get("workspace", {}).get("description"):
+                    ws_description = template["spec"]["workspace"]["description"]
+                return create_workspace(name, slug=target.get("slug"), description=ws_description)
+            print(
+                f'Workspace "{name}" not found. Create it via the web UI first.',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return workspaces[name]
+
+    env_ws = os.environ.get("MULTICA_WORKSPACE_ID")
+    if env_ws:
+        return env_ws
+
+    return DEFAULT_TEST_WORKSPACE
+
+
+def resolve_workspace_simple(args):
+    """Resolve workspace for dump/clone source (no template, no create)."""
+    if getattr(args, "workspace_id", None):
+        return args.workspace_id
+
+    if getattr(args, "workspace_name", None):
+        name = args.workspace_name
+        workspaces = _parse_workspace_list_table()
+        if name not in workspaces:
+            print(
+                f'Workspace "{name}" not found.',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return workspaces[name]
+
+    env_ws = os.environ.get("MULTICA_WORKSPACE_ID")
+    if env_ws:
+        return env_ws
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def build_registry(workspace_id=None):
+    """Query the target workspace and build a (type, name) -> id registry."""
+    registry = {}
+    if workspace_id == DRY_RUN_ID:
+        return registry
+
+    ws = _run_json(["multica", "workspace", "get", "--output", "json"], workspace_id=workspace_id)
+    if isinstance(ws, dict):
+        registry[("workspace", ws.get("name"))] = ws.get("id")
+
+    labels = _run_json(["multica", "label", "list", "--output", "json"], workspace_id=workspace_id)
+    if isinstance(labels, list):
+        for item in labels:
+            registry[("label", item.get("name"))] = item.get("id")
+
+    skills = _run_json(["multica", "skill", "list", "--output", "json"], workspace_id=workspace_id)
+    if isinstance(skills, list):
+        for item in skills:
+            registry[("skill", item.get("name"))] = item.get("id")
+
+    agents = _run_json(["multica", "agent", "list", "--output", "json"], workspace_id=workspace_id)
+    if isinstance(agents, list):
+        for item in agents:
+            registry[("agent", item.get("name"))] = item.get("id")
+
+    squads = _run_json(["multica", "squad", "list", "--output", "json"], workspace_id=workspace_id)
+    if isinstance(squads, list):
+        for item in squads:
+            registry[("squad", item.get("name"))] = item.get("id")
+
+    autopilots_resp = _run_json(["multica", "autopilot", "list", "--output", "json"], workspace_id=workspace_id)
+    autopilots = []
+    if isinstance(autopilots_resp, dict):
+        autopilots = autopilots_resp.get("autopilots", [])
+    elif isinstance(autopilots_resp, list):
+        autopilots = autopilots_resp
+    for item in autopilots:
+        key = item.get("title") or item.get("name")
+        if key:
+            registry[("autopilot", key)] = item.get("id")
+
+    return registry
+
+
+# ---------------------------------------------------------------------------
+# Apply functions
+# ---------------------------------------------------------------------------
+
+def apply_workspace(spec, dry_run=False, workspace_id=None):
+    ws = spec.get("workspace")
+    if not ws:
+        return
+    print("[workspace] updating metadata")
+    cmd = ["multica", "workspace", "update", "--output", "json"]
+    cmd.extend(_flag("--name", ws.get("name")))
+    cmd.extend(_flag("--description", ws.get("description")))
+    cmd.extend(_flag("--issue-prefix", ws.get("issuePrefix")))
+    _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
+
+
+def apply_labels(spec, registry, dry_run=False, workspace_id=None):
+    for label in spec.get("labels") or []:
+        name = label["name"]
+        key = ("label", name)
+        if key in registry:
+            print(f"[label] {name} — updating")
+            cmd = ["multica", "label", "update", registry[key], "--output", "json"]
+        else:
+            print(f"[label] {name} — creating")
+            cmd = ["multica", "label", "create", "--output", "json"]
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--color", label.get("color")))
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
+        if result:
+            registry[key] = _get_id(result)
+
+
+def apply_skills(spec, registry, dry_run=False, workspace_id=None):
+    for skill in spec.get("skills") or []:
+        name = skill["name"]
+        key = ("skill", name)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        print(f"[skill] {name} — {action}")
+        cmd = ["multica", "skill", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--description", skill.get("description")))
+        cmd.extend(_flag("--content", skill.get("content")))
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
+
+        skill_id = registry.get(key)
+        if not skill_id and dry_run:
+            skill_id = DRY_RUN_ID
+        elif result:
+            skill_id = _get_id(result) or skill_id
+        if skill_id:
+            registry[key] = skill_id
+
+        for sf in skill.get("files") or []:
+            print(f"[skill] {name} — upsert file {sf['path']}")
+            fcmd = ["multica", "skill", "files", "upsert", skill_id, "--output", "json"]
+            fcmd.extend(_flag("--path", sf["path"]))
+            fcmd.extend(_flag("--content", sf["content"]))
+            _run_cmd(fcmd, dry_run=dry_run, workspace_id=workspace_id)
+
+
+def get_available_runtimes(workspace_id=None):
+    """Return list of available runtime dicts in the target workspace."""
+    cmd = ["multica", "runtime", "list", "--output", "json"]
+    if workspace_id:
+        cmd = cmd + ["--workspace-id", workspace_id]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return []
+    stdout = result.stdout.strip()
+    if not stdout:
+        return []
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def _runtime_label(runtime):
+    """Return a human-readable label for a runtime dict."""
+    if not runtime:
+        return "unknown"
+    parts = [runtime.get("name") or runtime.get("id", "unknown")]
+    provider = runtime.get("provider")
+    if provider:
+        parts.append(f"provider={provider}")
+    return " ".join(parts)
+
+
+def _resolve_runtime_id(agent, available_runtimes):
+    """Validate agent runtimeId and fall back to first available if invalid."""
+    name = agent["name"]
+    requested = agent.get("runtimeId")
+
+    runtime_by_id = {r.get("id"): r for r in available_runtimes if r.get("id")}
+
+    if requested and requested in runtime_by_id:
+        return requested
+
+    if available_runtimes:
+        fallback = available_runtimes[0].get("id")
+        fallback_label = _runtime_label(available_runtimes[0])
+        if requested:
+            print(
+                f"[agent] {name} — WARNING: runtimeId {requested!r} not found in target workspace, falling back to {fallback!r} ({fallback_label})",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[agent] {name} — WARNING: no runtimeId specified, falling back to {fallback!r} ({fallback_label})",
+                file=sys.stderr,
+            )
+        return fallback
+
+    print(
+        f"[agent] {name} — ERROR: no runtimes available in target workspace",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def apply_agents(spec, registry, dry_run=False, workspace_id=None):
+    available_runtimes = get_available_runtimes(workspace_id=workspace_id)
+
+    for agent in spec.get("agents") or []:
+        name = agent["name"]
+        key = ("agent", name)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        model = agent.get("model")
+        model_hint = f" model={model}" if model else ""
+        print(f"[agent] {name} — {action}{model_hint}")
+        cmd = ["multica", "agent", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--description", agent.get("description")))
+        resolved_runtime = _resolve_runtime_id(agent, available_runtimes)
+        cmd.extend(_flag("--runtime-id", resolved_runtime))
+        cmd.extend(_flag("--model", agent.get("model")))
+        cmd.extend(_flag("--instructions", agent.get("instructions")))
+        cmd.extend(_flag("--visibility", agent.get("visibility")))
+        cmd.extend(_flag("--max-concurrent-tasks", agent.get("maxConcurrentTasks")))
+        cmd.extend(_flag("--custom-args", agent.get("customArgs")))
+        cmd.extend(_flag("--custom-env", agent.get("customEnv")))
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
+
+        agent_id = registry.get(key)
+        if not agent_id and dry_run:
+            agent_id = DRY_RUN_ID
+        elif result:
+            agent_id = _get_id(result) or agent_id
+        if agent_id:
+            registry[key] = agent_id
+
+    # Final pass: skill bindings
+    for agent in spec.get("agents") or []:
+        name = agent["name"]
+        skills = agent.get("skills") or []
+        if not skills:
+            continue
+        skill_ids = []
+        for skill_name in skills:
+            sk = ("skill", skill_name)
+            if sk not in registry:
+                print(
+                    f"[agent] {name} — ERROR: referenced skill '{skill_name}' not found",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            skill_ids.append(registry[sk])
+        agent_key = ("agent", name)
+        agent_id = registry.get(agent_key)
+        if not agent_id:
+            print(f"[agent] {name} — ERROR: agent ID not found after apply", file=sys.stderr)
+            sys.exit(1)
+        print(f"[agent] {name} — setting skills ({', '.join(skills)})")
+        cmd = ["multica", "agent", "skills", "set", agent_id, "--output", "json"]
+        cmd.extend(_flag("--skill-ids", ",".join(skill_ids)))
+        _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
+
+
+def apply_squads(spec, registry, dry_run=False, workspace_id=None):
+    for squad in spec.get("squads") or []:
+        name = squad["name"]
+        leader_name = squad.get("leader")
+        if not leader_name:
+            print(f"[squad] {name} — ERROR: leader is required", file=sys.stderr)
+            sys.exit(1)
+        leader_key = ("agent", leader_name)
+        if leader_key not in registry:
+            print(
+                f"[squad] {name} — ERROR: leader agent '{leader_name}' not found",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        leader_id = registry[leader_key]
+        key = ("squad", name)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        print(f"[squad] {name} — {action}")
+        cmd = ["multica", "squad", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--name", name))
+        cmd.extend(_flag("--leader", leader_id))
+        cmd.extend(_flag("--description", squad.get("description")))
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
+
+        squad_id = registry.get(key)
+        if not squad_id and dry_run:
+            squad_id = DRY_RUN_ID
+        elif result:
+            squad_id = _get_id(result) or squad_id
+        if squad_id:
+            registry[key] = squad_id
+
+
+def apply_autopilots(spec, registry, dry_run=False, workspace_id=None):
+    for autopilot in spec.get("autopilots") or []:
+        name = autopilot.get("name")
+        title = autopilot.get("title") or name
+        agent_name = autopilot.get("agent")
+        if not agent_name:
+            print(f"[autopilot] {title} — ERROR: agent is required", file=sys.stderr)
+            sys.exit(1)
+        agent_key = ("agent", agent_name)
+        if agent_key not in registry:
+            print(
+                f"[autopilot] {title} — ERROR: agent '{agent_name}' not found",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        agent_id = registry[agent_key]
+        key = ("autopilot", title)
+        exists = key in registry
+        action = "updating" if exists else "creating"
+        print(f"[autopilot] {title} — {action}")
+        cmd = ["multica", "autopilot", "update" if exists else "create", "--output", "json"]
+        if exists:
+            cmd.append(registry[key])
+        cmd.extend(_flag("--title", title))
+        cmd.extend(_flag("--agent", agent_id))
+        cmd.extend(_flag("--mode", autopilot.get("mode")))
+        cmd.extend(_flag("--description", autopilot.get("description")))
+        cmd.extend(_flag("--priority", autopilot.get("priority")))
+        cmd.extend(_flag("--status", autopilot.get("status")))
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
+
+        autopilot_id = registry.get(key)
+        if not autopilot_id and dry_run:
+            autopilot_id = DRY_RUN_ID
+        elif result:
+            autopilot_id = _get_id(result) or autopilot_id
+        if autopilot_id:
+            registry[key] = autopilot_id
+
+
+# ---------------------------------------------------------------------------
+# GitHub fetching
+# ---------------------------------------------------------------------------
+
+def is_github_url(value):
+    """Return True if value looks like a GitHub repo reference."""
+    if not value:
+        return False
+    return (
+        value.startswith("https://github.com/")
+        or value.startswith("http://github.com/")
+        or value.startswith("github.com/")
+    )
+
+
+def parse_github_url(url):
+    """Parse a GitHub reference into (owner, repo, path, ref).
+
+    Supported forms:
+        github.com/owner/repo
+        github.com/owner/repo/path/to/dir
+        https://github.com/owner/repo
+        https://github.com/owner/repo/tree/REF/path
+        https://github.com/owner/repo/blob/REF/path
+
+    Returns a dict with keys: owner, repo, path, ref.
+    ref and path may be None.
+    """
+    original = url
+    # Normalise scheme
+    if url.startswith("http://"):
+        url = url[len("http://"):]
+    elif url.startswith("https://"):
+        url = url[len("https://"):]
+
+    if not url.startswith("github.com/"):
+        raise ValueError(f"Unsupported GitHub URL: {original}")
+
+    parts = url[len("github.com/"):].split("/")
+    if len(parts) < 2:
+        raise ValueError(f"Invalid GitHub URL: {original}")
+
+    owner = parts[0]
+    repo = parts[1]
+    path = None
+    ref = None
+
+    # Check for tree/blob URLs: github.com/owner/repo/tree/REF/path
+    if len(parts) >= 4 and parts[2] in ("tree", "blob"):
+        ref = parts[3]
+        if len(parts) > 4:
+            path = "/".join(parts[4:])
+    else:
+        # Remaining parts after owner/repo are the subdirectory path
+        if len(parts) > 2:
+            path = "/".join(parts[2:])
+
+    return {"owner": owner, "repo": repo, "path": path, "ref": ref}
+
+
+def fetch_github_repo(parsed, explicit_ref=None):
+    """Clone a GitHub repository into a temporary directory.
+
+    If explicit_ref is provided it overrides any ref extracted from the URL.
+    Returns a tuple (target_path, tmpdir) where tmpdir is the temporary
+    clone directory that the caller must clean up.
+    """
+    ref = explicit_ref or parsed.get("ref")
+    clone_url = f"https://github.com/{parsed['owner']}/{parsed['repo']}.git"
+
+    tmpdir = tempfile.mkdtemp(prefix="multica-template-")
+    try:
+        print(f"Fetching {clone_url}" + (f" (ref: {ref})" if ref else "") + " ...")
+        cmd = ["git", "clone", "--depth", "1"]
+        if ref:
+            cmd += ["--branch", ref]
+        cmd += [clone_url, tmpdir]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error cloning repository: {result.stderr}", file=sys.stderr)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            sys.exit(1)
+
+        target = tmpdir
+        if parsed.get("path"):
+            target = os.path.join(tmpdir, parsed["path"])
+            if not os.path.isdir(target):
+                print(
+                    f"Path '{parsed['path']}' not found in repository.",
+                    file=sys.stderr,
+                )
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                sys.exit(1)
+        return target, tmpdir
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Dump helpers
+# ---------------------------------------------------------------------------
+
+def fetch_workspace(workspace_id=None):
+    """Fetch workspace metadata."""
+    return _run_json(["multica", "workspace", "get", "--output", "json"], workspace_id=workspace_id)
+
+
+def fetch_labels(workspace_id=None):
+    """Fetch labels list."""
+    return _run_json(["multica", "label", "list", "--output", "json"], workspace_id=workspace_id) or []
+
+
+def fetch_skills(workspace_id=None):
+    """Fetch skills with full content and files."""
+    skills = _run_json(["multica", "skill", "list", "--output", "json"], workspace_id=workspace_id) or []
+    full_skills = []
+    for skill in skills:
+        detail = _run_json(["multica", "skill", "get", skill["id"], "--output", "json"], workspace_id=workspace_id)
+        if detail:
+            full_skills.append(detail)
+        else:
+            full_skills.append(skill)
+    return full_skills
+
+
+def fetch_agents(workspace_id=None):
+    """Fetch agents with full details."""
+    agents = _run_json(["multica", "agent", "list", "--output", "json"], workspace_id=workspace_id) or []
+    full_agents = []
+    for agent in agents:
+        detail = _run_json(["multica", "agent", "get", agent["id"], "--output", "json"], workspace_id=workspace_id)
+        if detail:
+            full_agents.append(detail)
+        else:
+            full_agents.append(agent)
+    return full_agents
+
+
+def fetch_squads(workspace_id=None):
+    """Fetch squads list."""
+    return _run_json(["multica", "squad", "list", "--output", "json"], workspace_id=workspace_id) or []
+
+
+def fetch_autopilots(workspace_id=None):
+    """Fetch autopilots with full details."""
+    resp = _run_json(["multica", "autopilot", "list", "--output", "json"], workspace_id=workspace_id)
+    autopilots = []
+    if isinstance(resp, dict):
+        autopilots = resp.get("autopilots", [])
+    elif isinstance(resp, list):
+        autopilots = resp
+
+    full_autopilots = []
+    for ap in autopilots:
+        detail = _run_json(["multica", "autopilot", "get", ap["id"], "--output", "json"], workspace_id=workspace_id)
+        if detail and isinstance(detail, dict) and "autopilot" in detail:
+            full_autopilots.append(detail["autopilot"])
+        else:
+            full_autopilots.append(ap)
+    return full_autopilots
+
+
+def build_template(workspace_id=None):
+    """Query the workspace and build a template dict."""
+    ws = fetch_workspace(workspace_id=workspace_id)
+    labels = fetch_labels(workspace_id=workspace_id)
+    skills = fetch_skills(workspace_id=workspace_id)
+    agents = fetch_agents(workspace_id=workspace_id)
+    squads = fetch_squads(workspace_id=workspace_id)
+    autopilots = fetch_autopilots(workspace_id=workspace_id)
+
+    # Build lookup tables: id -> name
+    agent_id_to_name = {a["id"]: a["name"] for a in agents}
+    skill_id_to_name = {s["id"]: s["name"] for s in skills}
+
+    template = {
+        "apiVersion": "multica.template/v1",
+        "kind": "WorkspaceTemplate",
+        "metadata": {
+            "name": ws.get("slug", "exported") if ws else "exported",
+            "description": f"Auto-exported from workspace {ws.get('name', '')}" if ws else "Auto-exported workspace template",
+        },
+        "spec": {},
+    }
+
+    # Workspace metadata
+    if ws:
+        ws_spec = {}
+        if ws.get("name"):
+            ws_spec["name"] = ws["name"]
+        if ws.get("description"):
+            ws_spec["description"] = ws["description"]
+        if ws.get("issue_prefix"):
+            ws_spec["issuePrefix"] = ws["issue_prefix"]
+        if ws_spec:
+            template["spec"]["workspace"] = ws_spec
+
+    # Labels
+    if labels:
+        template["spec"]["labels"] = [
+            {"name": lbl["name"], "color": lbl["color"]}
+            for lbl in labels
+        ]
+
+    # Skills
+    if skills:
+        skill_list = []
+        for skill in skills:
+            s = {
+                "name": skill["name"],
+            }
+            if skill.get("description"):
+                s["description"] = skill["description"]
+            if skill.get("content"):
+                s["content"] = skill["content"]
+            if skill.get("files"):
+                files = []
+                for f in skill["files"]:
+                    files.append({
+                        "path": f["path"],
+                        "content": f["content"],
+                    })
+                s["files"] = files
+            skill_list.append(s)
+        template["spec"]["skills"] = skill_list
+
+    # Agents
+    if agents:
+        agent_list = []
+        for agent in agents:
+            a = {
+                "name": agent["name"],
+            }
+            if agent.get("description"):
+                a["description"] = agent["description"]
+            if agent.get("runtime_id"):
+                a["runtimeId"] = agent["runtime_id"]
+            if agent.get("model"):
+                a["model"] = agent["model"]
+            if agent.get("instructions"):
+                a["instructions"] = agent["instructions"]
+            if agent.get("visibility"):
+                a["visibility"] = agent["visibility"]
+            if agent.get("max_concurrent_tasks") is not None:
+                a["maxConcurrentTasks"] = agent["max_concurrent_tasks"]
+            if agent.get("custom_args"):
+                a["customArgs"] = agent["custom_args"]
+            if agent.get("custom_env"):
+                a["customEnv"] = agent["custom_env"]
+            # Resolve skill IDs to names
+            agent_skills = agent.get("skills") or []
+            if agent_skills:
+                skill_names = []
+                for sk in agent_skills:
+                    sk_id = sk["id"] if isinstance(sk, dict) else sk
+                    sk_name = skill_id_to_name.get(sk_id)
+                    if sk_name:
+                        skill_names.append(sk_name)
+                if skill_names:
+                    a["skills"] = skill_names
+            agent_list.append(a)
+        template["spec"]["agents"] = agent_list
+
+    # Squads
+    if squads:
+        squad_list = []
+        for squad in squads:
+            sq = {
+                "name": squad["name"],
+            }
+            if squad.get("description"):
+                sq["description"] = squad["description"]
+            leader_id = squad.get("leader_id")
+            if leader_id and leader_id in agent_id_to_name:
+                sq["leader"] = agent_id_to_name[leader_id]
+            elif leader_id:
+                sq["leader"] = leader_id
+            squad_list.append(sq)
+        template["spec"]["squads"] = squad_list
+
+    # Autopilots
+    if autopilots:
+        autopilot_list = []
+        for ap in autopilots:
+            ap_out = {
+                "name": ap.get("title") or ap.get("name", "unnamed"),
+            }
+            if ap.get("title"):
+                ap_out["title"] = ap["title"]
+            assignee_id = ap.get("assignee_id")
+            if assignee_id and assignee_id in agent_id_to_name:
+                ap_out["agent"] = agent_id_to_name[assignee_id]
+            elif assignee_id:
+                ap_out["agent"] = assignee_id
+            if ap.get("execution_mode"):
+                ap_out["mode"] = ap["execution_mode"]
+            if ap.get("description"):
+                ap_out["description"] = ap["description"]
+            if ap.get("priority"):
+                ap_out["priority"] = ap["priority"]
+            if ap.get("status"):
+                ap_out["status"] = ap["status"]
+            autopilot_list.append(ap_out)
+        template["spec"]["autopilots"] = autopilot_list
+
+    return template
+
+
+def write_template(template, output_dir):
+    """Write template.yaml to the output directory."""
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    path = os.path.join(output_dir, "template.yaml")
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(template, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: apply
+# ---------------------------------------------------------------------------
+
+def cmd_apply(args):
+    source = args.source
+    tmpdir = None
+
+    def _cleanup_tmpdir():
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    atexit.register(_cleanup_tmpdir)
+
+    if is_github_url(source):
+        parsed = parse_github_url(source)
+        source, tmpdir = fetch_github_repo(parsed, explicit_ref=args.ref)
+    elif args.ref:
+        print("--ref can only be used with a GitHub source.", file=sys.stderr)
+        sys.exit(1)
+
+    template = load_template(source)
+
+    target_ws = resolve_workspace(args, template, dry_run=args.dry_run)
+    if target_ws:
+        print(f"Target workspace: {target_ws}")
+    else:
+        print("Target workspace: current workspace")
+
+    print(f"Template: {template['metadata']['name']}")
+    print("Building registry from workspace state...")
+    registry = build_registry(workspace_id=target_ws)
+    print("Applying resources...\n")
+    sys.stdout.flush()
+
+    spec = template.get("spec", {})
+    apply_workspace(spec, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_labels(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_skills(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_agents(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_squads(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_autopilots(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+
+    print("\nDone.")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: dump
+# ---------------------------------------------------------------------------
+
+def cmd_dump(args):
+    target_ws = resolve_workspace_simple(args)
+    if target_ws:
+        print(f"Source workspace: {target_ws}")
+    else:
+        print("Source workspace: current workspace")
+
+    print("Fetching workspace state...")
+    template = build_template(workspace_id=target_ws)
+
+    print(f"Writing template to {args.output_dir}/template.yaml ...")
+    path = write_template(template, args.output_dir)
+
+    print(f"Done. Exported to: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: clone
+# ---------------------------------------------------------------------------
+
+def cmd_clone(args):
+    """Clone a workspace: dump from source, apply to target."""
+    # Resolve source workspace
+    source_ws = None
+    if args.from_id:
+        source_ws = args.from_id
+    elif args.from_name:
+        workspaces = _parse_workspace_list_table()
+        if args.from_name not in workspaces:
+            print(f'Source workspace "{args.from_name}" not found.', file=sys.stderr)
+            sys.exit(1)
+        source_ws = workspaces[args.from_name]
+    else:
+        source_ws = os.environ.get("MULTICA_WORKSPACE_ID")
+        if not source_ws:
+            print(
+                "Source workspace not specified. Use --from-id or --from-name, "
+                "or set MULTICA_WORKSPACE_ID.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    print(f"Source workspace: {source_ws}")
+
+    # Resolve target workspace
+    target_ws = None
+    if args.to_id:
+        target_ws = args.to_id
+    elif args.to_name:
+        workspaces = _parse_workspace_list_table()
+        if args.to_name not in workspaces:
+            if args.create_workspace:
+                print(f'Target workspace "{args.to_name}" not found. Creating...')
+                target_ws = create_workspace(args.to_name)
+            else:
+                print(
+                    f'Target workspace "{args.to_name}" not found. '
+                    'Use --create-workspace to create it.',
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            target_ws = workspaces[args.to_name]
+    else:
+        print(
+            "Target workspace not specified. Use --to-id or --to-name.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print(f"Target workspace: {target_ws}")
+
+    # Dump source to temp directory
+    tmpdir = tempfile.mkdtemp(prefix="multica-template-clone-")
+    atexit.register(lambda: shutil.rmtree(tmpdir, ignore_errors=True))
+
+    print("Fetching workspace state...")
+    template = build_template(workspace_id=source_ws)
+
+    template_path = write_template(template, tmpdir)
+    print(f"Intermediate template: {template_path}")
+
+    # Load and apply to target
+    template = load_template(tmpdir)
+
+    print("Building registry from target workspace state...")
+    registry = build_registry(workspace_id=target_ws)
+    print("Applying resources...\n")
+    sys.stdout.flush()
+
+    spec = template.get("spec", {})
+    apply_workspace(spec, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_labels(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_skills(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_agents(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_squads(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_autopilots(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+
+    print("\nDone.")
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Declarative workspace provisioning for Multica.",
+        usage="multica-template [-h] <command> [<args>]",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # ------------------------------------------------------------------
+    # apply
+    # ------------------------------------------------------------------
+    apply_parser = subparsers.add_parser(
+        "apply",
+        help="Apply a workspace template",
+        description="Apply a Multica workspace template to a target workspace.",
+    )
+    apply_parser.add_argument(
+        "source",
+        help=(
+            "Path to directory containing template.yaml, "
+            "or a GitHub repo reference such as github.com/owner/repo"
+        ),
+    )
+    apply_parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    apply_parser.add_argument("--workspace-id", help="Apply to an explicit workspace UUID")
+    apply_parser.add_argument("--workspace-name", help="Resolve workspace name to ID and apply there")
+    apply_parser.add_argument("--create-workspace", action="store_true", help="Create the target workspace if it does not exist")
+    apply_parser.add_argument(
+        "--ref",
+        dest="ref",
+        help="Git ref (branch or tag) to checkout when using a GitHub source",
+    )
+    apply_parser.set_defaults(func=cmd_apply)
+
+    # ------------------------------------------------------------------
+    # dump
+    # ------------------------------------------------------------------
+    dump_parser = subparsers.add_parser(
+        "dump",
+        help="Export a workspace to a declarative template",
+        description="Dump a Multica workspace to a declarative template.yaml file.",
+    )
+    dump_parser.add_argument("output_dir", help="Path to directory where template.yaml will be written")
+    dump_parser.add_argument("--workspace-id", help="Dump from an explicit workspace UUID")
+    dump_parser.add_argument("--workspace-name", help="Resolve workspace name to ID and dump from there")
+    dump_parser.set_defaults(func=cmd_dump)
+
+    # ------------------------------------------------------------------
+    # clone
+    # ------------------------------------------------------------------
+    clone_parser = subparsers.add_parser(
+        "clone",
+        help="Copy one workspace to another (dump + apply)",
+        description="Clone a Multica workspace by dumping it and applying to another workspace.",
+    )
+    clone_parser.add_argument("--from-id", help="Source workspace UUID")
+    clone_parser.add_argument("--from-name", help="Source workspace name")
+    clone_parser.add_argument("--to-id", help="Target workspace UUID")
+    clone_parser.add_argument("--to-name", help="Target workspace name")
+    clone_parser.add_argument("--create-workspace", action="store_true", help="Create the target workspace if it does not exist")
+    clone_parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    clone_parser.set_defaults(func=cmd_clone)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
