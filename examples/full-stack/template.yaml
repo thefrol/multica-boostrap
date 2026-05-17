@@ -4,6 +4,9 @@ metadata:
   name: full-stack
   description: "Full example: agents, squads, and autopilots"
 spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
   workspace:
     name: "Full Stack Team"
     description: "Complete team setup with squads and scheduled automations"
@@ -42,7 +45,7 @@ spec:
   agents:
     - name: k8s-architect
       description: "Kubernetes platform architect"
-      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
       model: claude-sonnet-4-6
       instructions: |
         You are a Kubernetes architect. You plan infrastructure changes,
@@ -54,7 +57,7 @@ spec:
 
     - name: frontend-lead
       description: "Frontend team lead"
-      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
       model: claude-sonnet-4-6
       instructions: |
         You are a senior frontend engineer. Review React code, enforce
@@ -66,7 +69,7 @@ spec:
 
     - name: backend-lead
       description: "Backend team lead"
-      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
       model: claude-opus-4-6
       instructions: |
         You are a backend architect. Design APIs, review database schemas,

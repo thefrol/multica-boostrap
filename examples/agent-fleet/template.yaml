@@ -4,6 +4,9 @@ metadata:
   name: agent-fleet
   description: "A fleet of specialized agents with shared skills"
 spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
   workspace:
     name: "Agent Fleet"
     description: "Workspace with a fleet of autonomous agents"
@@ -40,7 +43,7 @@ spec:
   agents:
     - name: auto-coder
       description: "Autonomous coding agent"
-      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
       model: claude-sonnet-4-6
       instructions: |
         You are an autonomous coding agent. Write clean, tested code.
@@ -52,7 +55,7 @@ spec:
 
     - name: security-guardian
       description: "Security review agent"
-      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
       model: claude-opus-4-6
       instructions: |
         You are a security-focused code reviewer.

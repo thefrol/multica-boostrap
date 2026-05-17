@@ -5,7 +5,7 @@ metadata:
   description: "Demonstrates applying a template to a specific workspace by name"
 spec:
   targetWorkspace:
-    name: "Full Stack Team"
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
 
   labels:
     - name: target-demo

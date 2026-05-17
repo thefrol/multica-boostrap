@@ -4,6 +4,9 @@ metadata:
   name: update-existing
   description: "Demonstrates updating existing resources (idempotency with changes)"
 spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
   workspace:
     name: "Update Existing"
     description: "Workspace for demonstrating resource updates"
@@ -18,7 +21,7 @@ spec:
   agents:
     - name: auto-coder
       description: "Autonomous coding agent"
-      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
       model: claude-sonnet-4-6
       instructions: |
         You are an autonomous coding agent. Write clean, tested code.

@@ -157,12 +157,18 @@ def _parse_workspace_list_table():
     return workspaces
 
 
+# Test workspace UUID used as the default target for all template operations.
+# This prevents accidental modifications to the production workspace.
+DEFAULT_TEST_WORKSPACE = "b025515a-259e-4679-963d-35ba3fce947a"
+
+
 def resolve_workspace(args, template):
     """Resolve target workspace according to precedence rules.
 
     Precedence:
         --workspace-id > --workspace-name > spec.targetWorkspace.id >
-        spec.targetWorkspace.name > current workspace (None)
+        spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var >
+        DEFAULT_TEST_WORKSPACE
     """
     spec = template.get("spec") or {}
     target = spec.get("targetWorkspace") or {}
@@ -195,7 +201,11 @@ def resolve_workspace(args, template):
             sys.exit(1)
         return workspaces[name]
 
-    return None
+    env_ws = os.environ.get("MULTICA_WORKSPACE_ID")
+    if env_ws:
+        return env_ws
+
+    return DEFAULT_TEST_WORKSPACE
 
 
 # ---------------------------------------------------------------------------

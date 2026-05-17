@@ -4,6 +4,9 @@ metadata:
   name: basic-workspace
   description: "Minimal example: rename a workspace and add labels"
 spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
   workspace:
     name: "Basic Demo"
     description: "A minimal workspace for demonstrating template application"
