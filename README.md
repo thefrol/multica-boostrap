@@ -17,6 +17,10 @@ multica-template-apply ./examples/agent-fleet --dry-run
 # Apply to a specific workspace by ID or name
 multica-template-apply ./examples/basic-workspace --workspace-id <uuid>
 multica-template-apply ./examples/basic-workspace --workspace-name "Team Alpha"
+
+# Create a new workspace from a template
+multica-template-apply ./examples/create-workspace
+multica-template-apply ./examples/create-workspace --workspace-name "My Team" --create-workspace
 ```
 
 ## How It Works
@@ -62,6 +66,7 @@ multica-template-space/
 ├── examples/
 │   ├── basic-workspace/      # Rename a workspace, add labels
 │   ├── agent-fleet/          # Multiple agents with skills
+│   ├── create-workspace/     # Create a new workspace from a template
 │   ├── full-stack/           # Agents + squads + autopilots
 │   └── target-workspace/     # Apply to a specific workspace by name
 └── bin/
@@ -160,6 +165,22 @@ does not exist, the engine fails fast with:
 Workspace "X" not found. Create it via the web UI first.
 ```
 
+You can override this and create the workspace on the fly:
+
+```bash
+multica-template-apply ./examples/create-workspace --workspace-name "New Team" --create-workspace
+```
+
+Or declare it in the template:
+
+```yaml
+spec:
+  targetWorkspace:
+    name: "New Team"
+    create: true
+    slug: "new-team"          # optional, auto-generated from name if omitted
+```
+
 ## Safe Development
 
 All template examples in this repository are configured to target the **test workspace**
@@ -219,7 +240,7 @@ multica-template-apply ./examples/full-stack --dry-run
 
 | Phase | Scope |
 |-------|-------|
-| **v0.1** | Workspace metadata, labels, skills, agents, squads, autopilots, dry-run |
+| **v0.1** | Workspace metadata, labels, skills, agents, squads, autopilots, dry-run, workspace creation |
 | **v0.2** | Diff output, state caching |
 | **v0.3** | Template variables / parameterization |
 | **v0.4** | Template registry (git-based catalog) |
