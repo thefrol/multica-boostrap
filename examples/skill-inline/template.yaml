@@ -4,6 +4,9 @@ metadata:
   name: skill-inline
   description: "Demonstrates a skill using inline content instead of files"
 spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
   workspace:
     name: "Skill Inline"
     description: "Workspace demonstrating inline skill content"

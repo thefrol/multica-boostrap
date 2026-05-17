@@ -161,6 +161,61 @@ does not exist, the engine fails fast with:
 Workspace "X" not found. Create it via the web UI first.
 ```
 
+## Safe Development
+
+All template examples in this repository are configured to target the **test workspace**
+(`test-space`, `b025515a-259e-4679-963d-35ba3fce947a`) by default. This prevents
+accidental changes to production workspaces during development and testing.
+
+### Policy
+
+1. **Never apply templates to a production workspace without explicit review.**
+2. **Always verify the target workspace before running `multica-template-apply`.**
+3. **Use `MULTICA_WORKSPACE_ID` or `--workspace-id` to override the default target.**
+
+### Default Target Behavior
+
+The engine resolves the target workspace in the following precedence:
+
+```
+--workspace-id > --workspace-name > spec.targetWorkspace.id >
+spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var > test-space (default)
+```
+
+If no target is specified via CLI flags, template fields, or environment variables,
+the engine automatically applies changes to the designated test workspace.
+
+### Setting the Target Workspace
+
+#### Via environment variable (recommended for CI)
+
+```bash
+export MULTICA_WORKSPACE_ID="b025515a-259e-4679-963d-35ba3fce947a"
+multica-template-apply ./examples/basic-workspace
+```
+
+#### Via CLI flag (recommended for one-off runs)
+
+```bash
+multica-template-apply ./examples/basic-workspace --workspace-id <uuid>
+```
+
+#### Via template field
+
+```yaml
+spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+```
+
+### Dry-Run First
+
+Always use `--dry-run` to preview changes before applying:
+
+```bash
+multica-template-apply ./examples/full-stack --dry-run
+```
+
 ## Roadmap
 
 | Phase | Scope |

@@ -4,6 +4,9 @@ metadata:
   name: agent-customization
   description: "Demonstrates customArgs and customEnv on an agent"
 spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
   workspace:
     name: "Agent Customization"
     description: "Workspace showing agent customArgs and customEnv"
@@ -12,7 +15,7 @@ spec:
   agents:
     - name: customized-coder
       description: "Agent with custom CLI args and environment variables"
-      runtimeId: "1a7010cd-5d33-4206-8208-5767a497ff39"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
       model: claude-sonnet-4-6
       instructions: |
         You are a coding agent with customized runtime behavior.
