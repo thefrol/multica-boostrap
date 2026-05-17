@@ -21,6 +21,10 @@ multica-template-apply ./examples/basic-workspace --workspace-name "Team Alpha"
 # Create a new workspace from a template
 multica-template-apply ./examples/create-workspace
 multica-template-apply ./examples/create-workspace --workspace-name "My Team" --create-workspace
+
+# Dump an existing workspace to a template file
+multica-template-dump ./exported-template
+multica-template-dump ./exported-template --workspace-name "Team Alpha"
 ```
 
 ## How It Works
@@ -30,6 +34,27 @@ multica-template-apply ./examples/create-workspace --workspace-name "My Team" --
 3. The engine reads the template, compares it with the current workspace state,
    and issues the minimum set of `multica` CLI commands to converge to the
 desired state.
+
+## Dump Workspace Config
+
+The companion `multica-template-dump` command exports an existing workspace to a
+`template.yaml` file. This is useful for:
+
+- **Backing up** workspace configuration in git
+- **Cloning** a workspace setup to another workspace
+- **Starting** from an existing workspace and tweaking the template
+
+```bash
+# Dump current workspace
+multica-template-dump ./my-template
+
+# Dump a specific workspace by name
+multica-template-dump ./my-template --workspace-name "Team Alpha"
+```
+
+The dumped template uses symbolic names for all references (skills, agents, squad
+leaders, autopilot assignees) so it is fully portable and can be applied with
+`multica-template-apply`.
 
 ## The ID Problem — Solved
 
@@ -70,7 +95,8 @@ multica-template-space/
 │   ├── full-stack/           # Agents + squads + autopilots
 │   └── target-workspace/     # Apply to a specific workspace by name
 └── bin/
-    └── multica-template-apply  # Engine executable (see IMPLEMENTATION.md)
+    ├── multica-template-apply  # Engine executable (see IMPLEMENTATION.md)
+    └── multica-template-dump   # Export workspace to template.yaml
 ```
 
 ## Template Example
