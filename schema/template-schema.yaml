@@ -9,6 +9,15 @@ metadata:
   description: string   # Optional. Human-readable description.
 spec:
   # ---------------------------------------------------------------------------
+  # TARGET WORKSPACE
+  # ---------------------------------------------------------------------------
+  # Points the engine at a specific workspace. If omitted, the engine applies
+  # to the current workspace (from CLI context).
+  targetWorkspace:
+    id: string            # Explicit workspace UUID.
+    name: string          # Resolve workspace name to ID via `multica workspace list`.
+
+  # ---------------------------------------------------------------------------
   # WORKSPACE METADATA
   # ---------------------------------------------------------------------------
   # Updates the current workspace. All fields are optional; omitted fields

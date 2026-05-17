@@ -1,0 +1,12 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: target-workspace-example
+  description: "Demonstrates applying a template to a specific workspace by name"
+spec:
+  targetWorkspace:
+    name: "Full Stack Team"
+
+  labels:
+    - name: target-demo
+      color: "#f59e0b"

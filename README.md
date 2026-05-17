@@ -13,6 +13,10 @@ multica-template-apply ./examples/basic-workspace
 
 # Dry-run to see what would change
 multica-template-apply ./examples/agent-fleet --dry-run
+
+# Apply to a specific workspace by ID or name
+multica-template-apply ./examples/basic-workspace --workspace-id <uuid>
+multica-template-apply ./examples/basic-workspace --workspace-name "Team Alpha"
 ```
 
 ## How It Works
@@ -58,7 +62,8 @@ multica-template-space/
 ├── examples/
 │   ├── basic-workspace/      # Rename a workspace, add labels
 │   ├── agent-fleet/          # Multiple agents with skills
-│   └── full-stack/           # Agents + squads + autopilots
+│   ├── full-stack/           # Agents + squads + autopilots
+│   └── target-workspace/     # Apply to a specific workspace by name
 └── bin/
     └── multica-template-apply  # Engine executable (see IMPLEMENTATION.md)
 ```
@@ -114,6 +119,46 @@ spec:
       mode: create_issue
       description: "Run a daily health check on the cluster"
       priority: high
+```
+
+## Target Workspace
+
+By default, the engine applies to the **current workspace** (your active `multica`
+CLI context). You can override this in three ways:
+
+### 1. CLI Flags (highest precedence)
+
+```bash
+multica-template-apply ./examples/basic-workspace --workspace-id <uuid>
+multica-template-apply ./examples/basic-workspace --workspace-name "Team Alpha"
+```
+
+### 2. Template Field
+
+```yaml
+spec:
+  targetWorkspace:
+    id: "4b4ec473-4336-43e6-9992-875fbd70b584"
+    # or
+    name: "Full Stack Team"
+```
+
+### 3. Current Workspace (fallback)
+
+If no target is specified, the engine uses the workspace from your `multica`
+profile.
+
+### Precedence
+
+```
+--workspace-id > --workspace-name > spec.targetWorkspace.id > spec.targetWorkspace.name > current workspace
+```
+
+If `--workspace-name` or `spec.targetWorkspace.name` is used but the workspace
+does not exist, the engine fails fast with:
+
+```
+Workspace "X" not found. Create it via the web UI first.
 ```
 
 ## Roadmap

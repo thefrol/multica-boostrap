@@ -5,6 +5,8 @@ multica-template-apply — Declarative workspace provisioning engine for Multica
 Usage:
     multica-template-apply ./examples/basic-workspace
     multica-template-apply ./examples/agent-fleet --dry-run
+    multica-template-apply ./examples/full-stack --workspace-id <uuid>
+    multica-template-apply ./examples/full-stack --workspace-name "Team Alpha"
 """
 
 import argparse
@@ -22,8 +24,9 @@ import yaml
 
 TOP_LEVEL_KEYS = {"apiVersion", "kind", "metadata", "spec"}
 METADATA_KEYS = {"name", "description"}
-SPEC_KEYS = {"workspace", "labels", "skills", "agents", "squads", "autopilots"}
+SPEC_KEYS = {"targetWorkspace", "workspace", "labels", "skills", "agents", "squads", "autopilots"}
 
+TARGET_WORKSPACE_KEYS = {"id", "name"}
 WORKSPACE_KEYS = {"name", "description", "issuePrefix"}
 LABEL_KEYS = {"name", "color"}
 SKILL_KEYS = {"name", "description", "content", "files"}
@@ -85,6 +88,9 @@ def load_template(directory):
     _validate_keys(spec, SPEC_KEYS, "spec")
 
     # Validate sub-resources
+    if "targetWorkspace" in spec:
+        _validate_keys(spec["targetWorkspace"], TARGET_WORKSPACE_KEYS, "spec.targetWorkspace")
+
     if "workspace" in spec:
         _validate_keys(spec["workspace"], WORKSPACE_KEYS, "spec.workspace")
 
@@ -123,11 +129,83 @@ def load_template(directory):
 
 
 # ---------------------------------------------------------------------------
+# Workspace resolution
+# ---------------------------------------------------------------------------
+
+def _parse_workspace_list_table():
+    """Run 'multica workspace list' and parse the ID/NAME table."""
+    result = subprocess.run(
+        ["multica", "workspace", "list"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"Error running command: multica workspace list", file=sys.stderr)
+        print(f"stderr: {result.stderr}", file=sys.stderr)
+        sys.exit(result.returncode)
+
+    lines = result.stdout.strip().splitlines()
+    workspaces = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("ID"):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) >= 2:
+            ws_id = parts[0]
+            ws_name = parts[1]
+            workspaces[ws_name] = ws_id
+    return workspaces
+
+
+def resolve_workspace(args, template):
+    """Resolve target workspace according to precedence rules.
+
+    Precedence:
+        --workspace-id > --workspace-name > spec.targetWorkspace.id >
+        spec.targetWorkspace.name > current workspace (None)
+    """
+    spec = template.get("spec") or {}
+    target = spec.get("targetWorkspace") or {}
+
+    if args.workspace_id:
+        return args.workspace_id
+
+    if args.workspace_name:
+        name = args.workspace_name
+        workspaces = _parse_workspace_list_table()
+        if name not in workspaces:
+            print(
+                f'Workspace "{name}" not found. Create it via the web UI first.',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return workspaces[name]
+
+    if target.get("id"):
+        return target["id"]
+
+    if target.get("name"):
+        name = target["name"]
+        workspaces = _parse_workspace_list_table()
+        if name not in workspaces:
+            print(
+                f'Workspace "{name}" not found. Create it via the web UI first.',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return workspaces[name]
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
-def _run_json(cmd):
+def _run_json(cmd, workspace_id=None):
     """Run a multica command and return parsed JSON."""
+    if workspace_id:
+        cmd = cmd + ["--workspace-id", workspace_id]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Error running command: {' '.join(cmd)}", file=sys.stderr)
@@ -139,35 +217,35 @@ def _run_json(cmd):
     return json.loads(stdout)
 
 
-def build_registry():
-    """Query the current workspace and build a (type, name) -> id registry."""
+def build_registry(workspace_id=None):
+    """Query the target workspace and build a (type, name) -> id registry."""
     registry = {}
 
-    ws = _run_json(["multica", "workspace", "get", "--output", "json"])
+    ws = _run_json(["multica", "workspace", "get", "--output", "json"], workspace_id=workspace_id)
     if isinstance(ws, dict):
         registry[("workspace", ws.get("name"))] = ws.get("id")
 
-    labels = _run_json(["multica", "label", "list", "--output", "json"])
+    labels = _run_json(["multica", "label", "list", "--output", "json"], workspace_id=workspace_id)
     if isinstance(labels, list):
         for item in labels:
             registry[("label", item.get("name"))] = item.get("id")
 
-    skills = _run_json(["multica", "skill", "list", "--output", "json"])
+    skills = _run_json(["multica", "skill", "list", "--output", "json"], workspace_id=workspace_id)
     if isinstance(skills, list):
         for item in skills:
             registry[("skill", item.get("name"))] = item.get("id")
 
-    agents = _run_json(["multica", "agent", "list", "--output", "json"])
+    agents = _run_json(["multica", "agent", "list", "--output", "json"], workspace_id=workspace_id)
     if isinstance(agents, list):
         for item in agents:
             registry[("agent", item.get("name"))] = item.get("id")
 
-    squads = _run_json(["multica", "squad", "list", "--output", "json"])
+    squads = _run_json(["multica", "squad", "list", "--output", "json"], workspace_id=workspace_id)
     if isinstance(squads, list):
         for item in squads:
             registry[("squad", item.get("name"))] = item.get("id")
 
-    autopilots_resp = _run_json(["multica", "autopilot", "list", "--output", "json"])
+    autopilots_resp = _run_json(["multica", "autopilot", "list", "--output", "json"], workspace_id=workspace_id)
     autopilots = []
     if isinstance(autopilots_resp, dict):
         autopilots = autopilots_resp.get("autopilots", [])
@@ -185,8 +263,10 @@ def build_registry():
 # Execution helpers
 # ---------------------------------------------------------------------------
 
-def _run_cmd(cmd, dry_run=False):
+def _run_cmd(cmd, dry_run=False, workspace_id=None):
     """Run a multica command, or print it in dry-run mode."""
+    if workspace_id:
+        cmd = cmd + ["--workspace-id", workspace_id]
     if dry_run:
         print(f"  [dry-run] {' '.join(cmd)}")
         return None
@@ -222,7 +302,7 @@ def _get_id(result):
 # Apply functions
 # ---------------------------------------------------------------------------
 
-def apply_workspace(spec, dry_run=False):
+def apply_workspace(spec, dry_run=False, workspace_id=None):
     ws = spec.get("workspace")
     if not ws:
         return
@@ -231,10 +311,10 @@ def apply_workspace(spec, dry_run=False):
     cmd.extend(_flag("--name", ws.get("name")))
     cmd.extend(_flag("--description", ws.get("description")))
     cmd.extend(_flag("--issue-prefix", ws.get("issuePrefix")))
-    _run_cmd(cmd, dry_run=dry_run)
+    _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
 
-def apply_labels(spec, registry, dry_run=False):
+def apply_labels(spec, registry, dry_run=False, workspace_id=None):
     for label in spec.get("labels") or []:
         name = label["name"]
         key = ("label", name)
@@ -246,12 +326,12 @@ def apply_labels(spec, registry, dry_run=False):
             cmd = ["multica", "label", "create", "--output", "json"]
         cmd.extend(_flag("--name", name))
         cmd.extend(_flag("--color", label.get("color")))
-        result = _run_cmd(cmd, dry_run=dry_run)
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
         if result:
             registry[key] = _get_id(result)
 
 
-def apply_skills(spec, registry, dry_run=False):
+def apply_skills(spec, registry, dry_run=False, workspace_id=None):
     for skill in spec.get("skills") or []:
         name = skill["name"]
         key = ("skill", name)
@@ -264,7 +344,7 @@ def apply_skills(spec, registry, dry_run=False):
         cmd.extend(_flag("--name", name))
         cmd.extend(_flag("--description", skill.get("description")))
         cmd.extend(_flag("--content", skill.get("content")))
-        result = _run_cmd(cmd, dry_run=dry_run)
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         skill_id = registry.get(key)
         if not skill_id and dry_run:
@@ -279,10 +359,10 @@ def apply_skills(spec, registry, dry_run=False):
             fcmd = ["multica", "skill", "files", "upsert", skill_id, "--output", "json"]
             fcmd.extend(_flag("--path", sf["path"]))
             fcmd.extend(_flag("--content", sf["content"]))
-            _run_cmd(fcmd, dry_run=dry_run)
+            _run_cmd(fcmd, dry_run=dry_run, workspace_id=workspace_id)
 
 
-def apply_agents(spec, registry, dry_run=False):
+def apply_agents(spec, registry, dry_run=False, workspace_id=None):
     for agent in spec.get("agents") or []:
         name = agent["name"]
         key = ("agent", name)
@@ -301,7 +381,7 @@ def apply_agents(spec, registry, dry_run=False):
         cmd.extend(_flag("--max-concurrent-tasks", agent.get("maxConcurrentTasks")))
         cmd.extend(_flag("--custom-args", agent.get("customArgs")))
         cmd.extend(_flag("--custom-env", agent.get("customEnv")))
-        result = _run_cmd(cmd, dry_run=dry_run)
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         agent_id = registry.get(key)
         if not agent_id and dry_run:
@@ -335,10 +415,10 @@ def apply_agents(spec, registry, dry_run=False):
         print(f"[agent] {name} — setting skills ({', '.join(skills)})")
         cmd = ["multica", "agent", "skills", "set", agent_id, "--output", "json"]
         cmd.extend(_flag("--skill-ids", ",".join(skill_ids)))
-        _run_cmd(cmd, dry_run=dry_run)
+        _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
 
-def apply_squads(spec, registry, dry_run=False):
+def apply_squads(spec, registry, dry_run=False, workspace_id=None):
     for squad in spec.get("squads") or []:
         name = squad["name"]
         leader_name = squad.get("leader")
@@ -363,7 +443,7 @@ def apply_squads(spec, registry, dry_run=False):
         cmd.extend(_flag("--name", name))
         cmd.extend(_flag("--leader", leader_id))
         cmd.extend(_flag("--description", squad.get("description")))
-        result = _run_cmd(cmd, dry_run=dry_run)
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         squad_id = registry.get(key)
         if not squad_id and dry_run:
@@ -374,7 +454,7 @@ def apply_squads(spec, registry, dry_run=False):
             registry[key] = squad_id
 
 
-def apply_autopilots(spec, registry, dry_run=False):
+def apply_autopilots(spec, registry, dry_run=False, workspace_id=None):
     for autopilot in spec.get("autopilots") or []:
         name = autopilot.get("name")
         title = autopilot.get("title") or name
@@ -403,7 +483,7 @@ def apply_autopilots(spec, registry, dry_run=False):
         cmd.extend(_flag("--description", autopilot.get("description")))
         cmd.extend(_flag("--priority", autopilot.get("priority")))
         cmd.extend(_flag("--status", autopilot.get("status")))
-        result = _run_cmd(cmd, dry_run=dry_run)
+        result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         autopilot_id = registry.get(key)
         if not autopilot_id and dry_run:
@@ -422,22 +502,31 @@ def main():
     parser = argparse.ArgumentParser(description="Apply a Multica workspace template.")
     parser.add_argument("directory", help="Path to directory containing template.yaml")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    parser.add_argument("--workspace-id", help="Apply to an explicit workspace UUID")
+    parser.add_argument("--workspace-name", help="Resolve workspace name to ID and apply there")
     args = parser.parse_args()
 
     template = load_template(args.directory)
+
+    target_ws = resolve_workspace(args, template)
+    if target_ws:
+        print(f"Target workspace: {target_ws}")
+    else:
+        print("Target workspace: current workspace")
+
     print(f"Template: {template['metadata']['name']}")
-    print("Building registry from current workspace state...")
-    registry = build_registry()
+    print("Building registry from workspace state...")
+    registry = build_registry(workspace_id=target_ws)
     print("Applying resources...\n")
     sys.stdout.flush()
 
     spec = template.get("spec", {})
-    apply_workspace(spec, dry_run=args.dry_run)
-    apply_labels(spec, registry, dry_run=args.dry_run)
-    apply_skills(spec, registry, dry_run=args.dry_run)
-    apply_agents(spec, registry, dry_run=args.dry_run)
-    apply_squads(spec, registry, dry_run=args.dry_run)
-    apply_autopilots(spec, registry, dry_run=args.dry_run)
+    apply_workspace(spec, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_labels(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_skills(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_agents(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_squads(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_autopilots(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
 
     print("\nDone.")
 

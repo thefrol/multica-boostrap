@@ -59,12 +59,55 @@ def load_template(directory):
     return data
 ```
 
+## Step 0 — Resolve Target Workspace
+
+**Input:** CLI args (`--workspace-id`, `--workspace-name`) + parsed template.
+**Output:** A workspace UUID (or `None` for current workspace).
+
+**Precedence:**
+```
+--workspace-id > --workspace-name > spec.targetWorkspace.id > spec.targetWorkspace.name > current workspace
+```
+
+**Name resolution:**
+```bash
+multica workspace list   # outputs a table: ID  NAME
+```
+Parse the table, look up the name, return the UUID. If not found, fail fast:
+```
+Workspace "X" not found. Create it via the web UI first.
+```
+
+## Step 1 — Parse the Template
+
+**Input:** Path to a directory containing `template.yaml`.
+**Output:** A validated Python dict representing the template.
+
+**Validation rules:**
+- `apiVersion` must be `multica.template/v1`
+- `kind` must be `WorkspaceTemplate`
+- `metadata.name` is required
+- `spec` is required
+- Unknown keys at any level should raise a clear error
+- `spec.targetWorkspace` is optional; if present, may contain `id` or `name`
+
+**Code sketch:**
+```python
+def load_template(directory):
+    path = os.path.join(directory, "template.yaml")
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    validate(data)
+    return data
+```
+
 ## Step 2 — Query Current State
 
-**Input:** None (uses current workspace from `MULTICA_WORKSPACE_ID` or active profile).
+**Input:** Target workspace ID (or `None` for current workspace).
 **Output:** A dict mapping `(resource_type, name)` → `id_or_none`.
 
-Run these commands and parse JSON:
+Run these commands and parse JSON. If a target workspace ID is set, append
+`--workspace-id <id>` to every command:
 ```bash
 multica workspace get --output json
 multica label list --output json
@@ -215,7 +258,12 @@ the same exit code.
   and binds skills to agents.
 - [ ] `multica-template-apply ./examples/full-stack` creates squads and
   autopilots with correct leader/agent references.
+- [ ] `multica-template-apply ./examples/target-workspace` resolves workspace
+  by name and applies labels there.
+- [ ] `multica-template-apply ./examples/basic-workspace --workspace-id <uuid>`
+  applies to the explicit workspace.
 - [ ] Running the same apply command twice produces no errors and no duplicate
   resources.
 - [ ] `--dry-run` prints all planned commands without side effects.
 - [ ] Missing or invalid templates produce clear error messages.
+- [ ] Applying to a non-existent workspace by name fails fast with a clear error.

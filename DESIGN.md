@@ -8,8 +8,12 @@ autopilots) from version-controlled YAML templates.
 
 ## Non-Goals
 
-- Create workspaces from scratch (Multica workspace creation is handled by
-  `multica login` / web UI; the engine operates *inside* an existing workspace).
+- **Workspace creation** — The Multica CLI does not have a `workspace create`
+  command. Workspace creation must happen through the web UI (or `multica login`
+  auto-discovery). The engine operates *inside* an existing workspace.
+- Full Helm-style package management (templating with loops, conditionals,
+  sub-charts). Parameterized values are on the roadmap but out of scope for
+  v0.1.
 - Full Helm-style package management (templating with loops, conditionals,
   sub-charts). Parameterized values are on the roadmap but out of scope for
   v0.1.
@@ -37,6 +41,17 @@ Kubernetes-style API shape for familiarity.
 │   state     │     │   plan       │     │  (name → id)    │
 └─────────────┘     └──────────────┘     └─────────────────┘
 ```
+
+**Phase 0 — Resolve Target Workspace**
+- Determine the target workspace from CLI flags or the template:
+  - `--workspace-id <uuid>` → explicit UUID
+  - `--workspace-name <name>` → resolve via `multica workspace list`
+  - `spec.targetWorkspace.id` → explicit UUID
+  - `spec.targetWorkspace.name` → resolve via `multica workspace list`
+  - Fallback → current workspace (from CLI context)
+- Precedence: CLI flags override template fields.
+- If a target workspace is resolved, every `multica` command the engine runs
+  gets prefixed with `--workspace-id <id>`.
 
 **Phase 1 — Parse & Validate**
 - Read `template.yaml`.
@@ -123,6 +138,36 @@ The apply operation must be safe to run repeatedly. This is achieved by:
 | Reference to non-existent resource | Fail fast with clear message |
 | `multica` CLI error | Abort apply, print stderr, exit non-zero |
 | Network failure | Abort apply, rely on idempotency for retry |
+| Target workspace not found (by name) | Fail fast with: `Workspace "X" not found. Create it via the web UI first.` |
+
+## Target Workspace
+
+The engine can apply a template to any workspace the user has access to.
+
+### Resolution Precedence
+
+```
+--workspace-id > --workspace-name > spec.targetWorkspace.id > spec.targetWorkspace.name > current workspace
+```
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--workspace-id <uuid>` | Apply to an explicit workspace ID |
+| `--workspace-name <name>` | Resolve name to ID via `multica workspace list`, then apply |
+
+### Template Field
+
+```yaml
+spec:
+  targetWorkspace:
+    id: "4b4ec473-4336-43e6-9992-875fbd70b584"
+    name: "Full Stack Team"
+```
+
+Only one of `id` or `name` should be used. If both are present, `id` takes
+precedence.
 
 ## Resource Type Mapping
 
@@ -167,4 +212,5 @@ are converged.
 4. **State caching** — Cache `multica * list` results to speed up repeated
    applies.
 5. **Workspace creation** — If Multica adds a `workspace create` CLI command,
-   the engine can be extended to support it.
+   the engine can be extended to support it. Until then, workspace creation
+   remains a non-goal.
