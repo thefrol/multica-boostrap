@@ -10,11 +10,14 @@ Usage:
 """
 
 import argparse
+import atexit
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
 import yaml
@@ -646,16 +649,142 @@ def apply_autopilots(spec, registry, dry_run=False, workspace_id=None):
 # Main
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# GitHub fetching
+# ---------------------------------------------------------------------------
+
+def is_github_url(value):
+    """Return True if value looks like a GitHub repo reference."""
+    if not value:
+        return False
+    return (
+        value.startswith("https://github.com/")
+        or value.startswith("http://github.com/")
+        or value.startswith("github.com/")
+    )
+
+
+def parse_github_url(url):
+    """Parse a GitHub reference into (owner, repo, path, ref).
+
+    Supported forms:
+        github.com/owner/repo
+        github.com/owner/repo/path/to/dir
+        https://github.com/owner/repo
+        https://github.com/owner/repo/tree/REF/path
+        https://github.com/owner/repo/blob/REF/path
+
+    Returns a dict with keys: owner, repo, path, ref.
+    ref and path may be None.
+    """
+    original = url
+    # Normalise scheme
+    if url.startswith("http://"):
+        url = url[len("http://"):]
+    elif url.startswith("https://"):
+        url = url[len("https://"):]
+
+    if not url.startswith("github.com/"):
+        raise ValueError(f"Unsupported GitHub URL: {original}")
+
+    parts = url[len("github.com/"):].split("/")
+    if len(parts) < 2:
+        raise ValueError(f"Invalid GitHub URL: {original}")
+
+    owner = parts[0]
+    repo = parts[1]
+    path = None
+    ref = None
+
+    # Check for tree/blob URLs: github.com/owner/repo/tree/REF/path
+    if len(parts) >= 4 and parts[2] in ("tree", "blob"):
+        ref = parts[3]
+        if len(parts) > 4:
+            path = "/".join(parts[4:])
+    else:
+        # Remaining parts after owner/repo are the subdirectory path
+        if len(parts) > 2:
+            path = "/".join(parts[2:])
+
+    return {"owner": owner, "repo": repo, "path": path, "ref": ref}
+
+
+def fetch_github_repo(parsed, explicit_ref=None):
+    """Clone a GitHub repository into a temporary directory.
+
+    If explicit_ref is provided it overrides any ref extracted from the URL.
+    Returns a tuple (target_path, tmpdir) where tmpdir is the temporary
+    clone directory that the caller must clean up.
+    """
+    ref = explicit_ref or parsed.get("ref")
+    clone_url = f"https://github.com/{parsed['owner']}/{parsed['repo']}.git"
+
+    tmpdir = tempfile.mkdtemp(prefix="multica-template-")
+    try:
+        print(f"Fetching {clone_url}" + (f" (ref: {ref})" if ref else "") + " ...")
+        cmd = ["git", "clone", "--depth", "1"]
+        if ref:
+            cmd += ["--branch", ref]
+        cmd += [clone_url, tmpdir]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error cloning repository: {result.stderr}", file=sys.stderr)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            sys.exit(1)
+
+        target = tmpdir
+        if parsed.get("path"):
+            target = os.path.join(tmpdir, parsed["path"])
+            if not os.path.isdir(target):
+                print(
+                    f"Path '{parsed['path']}' not found in repository.",
+                    file=sys.stderr,
+                )
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                sys.exit(1)
+        return target, tmpdir
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description="Apply a Multica workspace template.")
-    parser.add_argument("directory", help="Path to directory containing template.yaml")
+    parser.add_argument(
+        "source",
+        help=(
+            "Path to directory containing template.yaml, "
+            "or a GitHub repo reference such as github.com/owner/repo"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
     parser.add_argument("--workspace-id", help="Apply to an explicit workspace UUID")
     parser.add_argument("--workspace-name", help="Resolve workspace name to ID and apply there")
     parser.add_argument("--create-workspace", action="store_true", help="Create the target workspace if it does not exist")
+    parser.add_argument(
+        "--ref",
+        dest="ref",
+        help="Git ref (branch or tag) to checkout when using a GitHub source",
+    )
     args = parser.parse_args()
 
-    template = load_template(args.directory)
+    source = args.source
+    tmpdir = None
+
+    def _cleanup_tmpdir():
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    atexit.register(_cleanup_tmpdir)
+
+    if is_github_url(source):
+        parsed = parse_github_url(source)
+        source, tmpdir = fetch_github_repo(parsed, explicit_ref=args.ref)
+    elif args.ref:
+        print("--ref can only be used with a GitHub source.", file=sys.stderr)
+        sys.exit(1)
+
+    template = load_template(source)
 
     target_ws = resolve_workspace(args, template, dry_run=args.dry_run)
     if target_ws:
