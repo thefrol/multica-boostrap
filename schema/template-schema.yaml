@@ -80,6 +80,10 @@ spec:
     - name: string          # Required. Unique within the workspace.
       description: string   # Optional.
       leader: string        # Required. Agent name (resolved to ID at apply).
+      members:              # Optional. Additional squad members (beyond the leader).
+        - name: string      # Required. Agent or member name.
+          type: string      # Optional. "agent" or "member". Default: "agent".
+          role: string      # Optional. Role in the squad. Default: "member".
 
   # ---------------------------------------------------------------------------
   # AUTOPILOTS

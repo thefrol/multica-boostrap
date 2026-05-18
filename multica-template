@@ -194,7 +194,7 @@ AGENT_KEYS = {
     "name", "description", "runtimeId", "model", "instructions",
     "visibility", "maxConcurrentTasks", "customArgs", "customEnv", "skills",
 }
-SQUAD_KEYS = {"name", "description", "leader"}
+SQUAD_KEYS = {"name", "description", "leader", "members"}
 AUTOPILOT_KEYS = {"name", "title", "agent", "mode", "description", "priority", "status"}
 
 
@@ -610,6 +610,10 @@ def apply_agents(spec, registry, dry_run=False, workspace_id=None):
 
 
 def apply_squads(spec, registry, dry_run=False, workspace_id=None):
+    # Pre-fetch workspace members for resolving human member names
+    workspace_members = fetch_workspace_members_list(workspace_id=workspace_id)
+    member_name_to_id = {m["name"]: m["id"] for m in workspace_members}
+
     for squad in spec.get("squads") or []:
         name = squad["name"]
         leader_name = squad.get("leader")
@@ -643,6 +647,46 @@ def apply_squads(spec, registry, dry_run=False, workspace_id=None):
             squad_id = _get_id(result) or squad_id
         if squad_id:
             registry[key] = squad_id
+
+        # Add squad members
+        for member in squad.get("members") or []:
+            member_name = member.get("name")
+            member_type = member.get("type", "agent")
+            role = member.get("role", "member")
+
+            if member_type == "agent":
+                member_key = ("agent", member_name)
+                if member_key not in registry:
+                    print(
+                        f"[squad] {name} — WARNING: member agent '{member_name}' not found, skipping",
+                        file=sys.stderr,
+                    )
+                    continue
+                member_id = registry[member_key]
+            elif member_type == "member":
+                if member_name not in member_name_to_id:
+                    print(
+                        f"[squad] {name} — WARNING: member '{member_name}' not found in workspace, skipping",
+                        file=sys.stderr,
+                    )
+                    continue
+                member_id = member_name_to_id[member_name]
+            else:
+                print(
+                    f"[squad] {name} — WARNING: unknown member type '{member_type}', skipping",
+                    file=sys.stderr,
+                )
+                continue
+
+            print(f"[squad] {name} — adding member {member_name} ({member_type}, role={role})")
+            mcmd = [
+                "multica", "squad", "member", "add", squad_id,
+                "--output", "json",
+            ]
+            mcmd.extend(_flag("--member-id", member_id))
+            mcmd.extend(_flag("--type", member_type))
+            mcmd.extend(_flag("--role", role))
+            _run_cmd(mcmd, dry_run=dry_run, workspace_id=workspace_id)
 
 
 def apply_autopilots(spec, registry, dry_run=False, workspace_id=None):
@@ -829,6 +873,19 @@ def fetch_squads(workspace_id=None):
     return _run_json(["multica", "squad", "list", "--output", "json"], workspace_id=workspace_id) or []
 
 
+def fetch_squad_members(squad_id, workspace_id=None):
+    """Fetch members for a specific squad."""
+    return _run_json(
+        ["multica", "squad", "member", "list", squad_id, "--output", "json"],
+        workspace_id=workspace_id,
+    ) or []
+
+
+def fetch_workspace_members_list(workspace_id=None):
+    """Fetch workspace members list."""
+    return _run_json(["multica", "workspace", "members", "--output", "json"], workspace_id=workspace_id) or []
+
+
 def fetch_autopilots(workspace_id=None):
     """Fetch autopilots with full details."""
     resp = _run_json(["multica", "autopilot", "list", "--output", "json"], workspace_id=workspace_id)
@@ -860,6 +917,10 @@ def build_template(workspace_id=None):
     # Build lookup tables: id -> name
     agent_id_to_name = {a["id"]: a["name"] for a in agents}
     skill_id_to_name = {s["id"]: s["name"] for s in skills}
+
+    # Fetch workspace members for resolving human member IDs
+    workspace_members = fetch_workspace_members_list(workspace_id=workspace_id)
+    member_id_to_name = {m["id"]: m["name"] for m in workspace_members}
 
     template = {
         "apiVersion": "multica.template/v1",
@@ -963,6 +1024,31 @@ def build_template(workspace_id=None):
                 sq["leader"] = agent_id_to_name[leader_id]
             elif leader_id:
                 sq["leader"] = leader_id
+
+            # Fetch and include squad members (excluding the leader)
+            members = fetch_squad_members(squad["id"], workspace_id=workspace_id)
+            if members:
+                member_list = []
+                for member in members:
+                    member_id = member.get("member_id")
+                    member_type = member.get("member_type", "agent")
+                    role = member.get("role", "member")
+                    # Skip the leader since it's already represented by the leader field
+                    if member_id == leader_id and role == "leader":
+                        continue
+                    if member_type == "agent" and member_id in agent_id_to_name:
+                        member_name = agent_id_to_name[member_id]
+                    elif member_type == "member" and member_id in member_id_to_name:
+                        member_name = member_id_to_name[member_id]
+                    else:
+                        member_name = member_id
+                    member_list.append({
+                        "name": member_name,
+                        "type": member_type,
+                        "role": role,
+                    })
+                if member_list:
+                    sq["members"] = member_list
             squad_list.append(sq)
         template["spec"]["squads"] = squad_list
 

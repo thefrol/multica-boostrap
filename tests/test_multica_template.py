@@ -183,7 +183,7 @@ class TestLoadTemplate(unittest.TestCase):
                     "skills": ["sk1"],
                 }
             ],
-            "squads": [{"name": "sq1", "description": "d", "leader": "ag1"}],
+            "squads": [{"name": "sq1", "description": "d", "leader": "ag1", "members": [{"name": "ag2", "type": "agent", "role": "coder"}]}],
             "autopilots": [
                 {
                     "name": "ap1",
@@ -500,8 +500,9 @@ class TestApplyAgents(unittest.TestCase):
 
 
 class TestApplySquads(unittest.TestCase):
+    @patch("multica_template.fetch_workspace_members_list", return_value=[])
     @patch("multica_template._run_cmd")
-    def test_create(self, mock_run):
+    def test_create(self, mock_run, mock_ws_members):
         mock_run.return_value = {"id": "sq1"}
         registry = {("agent", "leader1"): "a1"}
         spec = {"squads": [{"name": "squad1", "leader": "leader1"}]}
@@ -512,15 +513,17 @@ class TestApplySquads(unittest.TestCase):
         self.assertIn("a1", cmd)
         self.assertEqual(registry[("squad", "squad1")], "sq1")
 
+    @patch("multica_template.fetch_workspace_members_list", return_value=[])
     @patch("multica_template._run_cmd")
-    def test_missing_leader_exits(self, mock_run):
+    def test_missing_leader_exits(self, mock_run, mock_ws_members):
         registry = {}
         spec = {"squads": [{"name": "squad1", "leader": "missing"}]}
         with self.assertRaises(SystemExit):
             mt.apply_squads(spec, registry, dry_run=False, workspace_id="ws1")
 
+    @patch("multica_template.fetch_workspace_members_list", return_value=[])
     @patch("multica_template._run_cmd")
-    def test_update(self, mock_run):
+    def test_update(self, mock_run, mock_ws_members):
         mock_run.return_value = {"id": "sq1"}
         registry = {("agent", "leader1"): "a1", ("squad", "squad1"): "sq1-old"}
         spec = {"squads": [{"name": "squad1", "leader": "leader1"}]}
@@ -528,6 +531,38 @@ class TestApplySquads(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         self.assertIn("update", cmd)
         self.assertIn("sq1-old", cmd)
+
+    @patch("multica_template.fetch_workspace_members_list", return_value=[])
+    @patch("multica_template._run_cmd")
+    def test_create_with_members(self, mock_run, mock_ws_members):
+        mock_run.side_effect = [
+            {"id": "sq1"},
+            None,  # member add
+        ]
+        registry = {("agent", "leader1"): "a1", ("agent", "member1"): "a2"}
+        spec = {"squads": [{"name": "squad1", "leader": "leader1", "members": [{"name": "member1", "type": "agent", "role": "coder"}]}]}
+        mt.apply_squads(spec, registry, dry_run=False, workspace_id="ws1")
+        self.assertEqual(mock_run.call_count, 2)
+        member_cmd = mock_run.call_args_list[1][0][0]
+        self.assertIn("member", member_cmd)
+        self.assertIn("add", member_cmd)
+        self.assertIn("a2", member_cmd)
+        self.assertIn("coder", member_cmd)
+
+    @patch("multica_template.fetch_workspace_members_list", return_value=[{"id": "m1", "name": "human1"}])
+    @patch("multica_template._run_cmd")
+    def test_create_with_human_member(self, mock_run, mock_ws_members):
+        mock_run.side_effect = [
+            {"id": "sq1"},
+            None,  # member add
+        ]
+        registry = {("agent", "leader1"): "a1"}
+        spec = {"squads": [{"name": "squad1", "leader": "leader1", "members": [{"name": "human1", "type": "member", "role": "reviewer"}]}]}
+        mt.apply_squads(spec, registry, dry_run=False, workspace_id="ws1")
+        self.assertEqual(mock_run.call_count, 2)
+        member_cmd = mock_run.call_args_list[1][0][0]
+        self.assertIn("m1", member_cmd)
+        self.assertIn("reviewer", member_cmd)
 
 
 class TestApplyAutopilots(unittest.TestCase):
@@ -620,7 +655,7 @@ class TestBuildTemplate(unittest.TestCase):
     def test_empty_workspace(self, mock_run):
         mock_run.side_effect = [
             {"id": "ws1", "name": "W", "slug": "w"},
-            [], [], [], [], {"autopilots": []},
+            [], [], [], [], {"autopilots": []}, [],
         ]
         tpl = mt.build_template(workspace_id="ws1")
         self.assertEqual(tpl["apiVersion"], "multica.template/v1")
@@ -647,6 +682,10 @@ class TestBuildTemplate(unittest.TestCase):
             # fetch_autopilots list + detail
             {"autopilots": [{"id": "ap1", "title": "Daily", "assignee_id": "a1", "execution_mode": "create_issue", "description": "d", "priority": "high", "status": "active"}]},
             {"autopilot": {"id": "ap1", "title": "Daily", "assignee_id": "a1", "execution_mode": "create_issue", "description": "d", "priority": "high", "status": "active"}},
+            # fetch_workspace_members_list
+            [],
+            # fetch_squad_members
+            [{"member_id": "a2", "member_type": "agent", "role": "coder"}],
         ]
         tpl = mt.build_template(workspace_id="ws1")
         spec = tpl["spec"]
@@ -657,6 +696,9 @@ class TestBuildTemplate(unittest.TestCase):
         self.assertEqual(spec["agents"][0]["name"], "ag1")
         self.assertEqual(spec["agents"][0]["skills"], ["sk1"])
         self.assertEqual(spec["squads"][0]["leader"], "ag1")
+        self.assertEqual(spec["squads"][0]["members"][0]["name"], "a2")
+        self.assertEqual(spec["squads"][0]["members"][0]["type"], "agent")
+        self.assertEqual(spec["squads"][0]["members"][0]["role"], "coder")
         self.assertEqual(spec["autopilots"][0]["agent"], "ag1")
         self.assertEqual(spec["autopilots"][0]["mode"], "create_issue")
 

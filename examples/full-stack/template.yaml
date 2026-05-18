@@ -78,6 +78,10 @@ spec:
     - name: platform-squad
       description: "Platform engineering squad"
       leader: k8s-architect
+      members:
+        - name: backend-lead
+          type: agent
+          role: coder
 
     - name: product-squad
       description: "Product development squad"
