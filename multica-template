@@ -717,7 +717,8 @@ def apply_autopilots(spec, registry, dry_run=False, workspace_id=None):
         cmd.extend(_flag("--mode", autopilot.get("mode")))
         cmd.extend(_flag("--description", autopilot.get("description")))
         cmd.extend(_flag("--priority", autopilot.get("priority")))
-        cmd.extend(_flag("--status", autopilot.get("status")))
+        if exists:
+            cmd.extend(_flag("--status", autopilot.get("status")))
         result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         autopilot_id = registry.get(key)
