@@ -224,8 +224,8 @@ means "leave as-is."
 1. For each squad in `spec.squads`:
    - Resolve `leader` name to agent ID using registry.
    - Look up `(squad, name)` in registry.
-   - If exists → `multica squad update <id> --name <name> --leader <leader-id> --description <desc>`.
-   - If missing → `multica squad create --name <name> --leader <leader-id> --description <desc>`.
+   - If exists → `multica squad update <id> --name <name> --leader <leader-id> --description <desc> --instructions <instructions>`.
+   - If missing → `multica squad create --name <name> --leader <leader-id> --description <desc>`, then `multica squad update <id> --instructions <instructions>`.
    - Capture returned ID and update registry.
 
 ## Step 8 — Apply Autopilots

@@ -175,7 +175,7 @@ precedence.
 | `skills[]` | `multica skill create` / `update` | `--name`, `--description`, `--content` | `--name`, `--description`, `--content` |
 | `skills[].files[]` | `multica skill files upsert` | `--path`, `--content` | same |
 | `agents[]` | `multica agent create` / `update` | `--name`, `--runtime-id`, `--model`, `--instructions`, `--visibility`, `--max-concurrent-tasks`, `--custom-args`, `--description` | same + `<id>` |
-| `squads[]` | `multica squad create` / `update` | `--name`, `--leader`, `--description` | `--name`, `--leader`, `--description` + `<id>` |
+| `squads[]` | `multica squad create` / `update` | `--name`, `--leader`, `--description` | `--name`, `--leader`, `--description`, `--instructions` + `<id>` |
 | `autopilots[]` | `multica autopilot create` / `update` | `--title`, `--agent`, `--mode`, `--description`, `--priority` | same + `<id>` |
 
 > **Note on labels:** Existing labels are updated in-place using

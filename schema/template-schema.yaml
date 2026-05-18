@@ -79,6 +79,7 @@ spec:
   squads:
     - name: string          # Required. Unique within the workspace.
       description: string   # Optional.
+      instructions: string  # Optional. Squad system instructions.
       leader: string        # Required. Agent name (resolved to ID at apply).
       members:              # Optional. Additional squad members (beyond the leader).
         - name: string      # Required. Agent or member name.

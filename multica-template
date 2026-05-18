@@ -194,7 +194,7 @@ AGENT_KEYS = {
     "name", "description", "runtimeId", "model", "instructions",
     "visibility", "maxConcurrentTasks", "customArgs", "customEnv", "skills",
 }
-SQUAD_KEYS = {"name", "description", "leader", "members"}
+SQUAD_KEYS = {"name", "description", "instructions", "leader", "members"}
 AUTOPILOT_KEYS = {"name", "title", "agent", "mode", "description", "priority", "status"}
 
 
@@ -638,6 +638,9 @@ def apply_squads(spec, registry, dry_run=False, workspace_id=None):
         cmd.extend(_flag("--name", name))
         cmd.extend(_flag("--leader", leader_id))
         cmd.extend(_flag("--description", squad.get("description")))
+        # Note: squad create does not support --instructions; apply it via update after creation
+        if exists:
+            cmd.extend(_flag("--instructions", squad.get("instructions")))
         result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         squad_id = registry.get(key)
@@ -647,6 +650,13 @@ def apply_squads(spec, registry, dry_run=False, workspace_id=None):
             squad_id = _get_id(result) or squad_id
         if squad_id:
             registry[key] = squad_id
+
+        # Apply instructions for newly-created squads via a follow-up update
+        if not exists and squad_id and squad.get("instructions"):
+            print(f"[squad] {name} — applying instructions")
+            icmd = ["multica", "squad", "update", squad_id, "--output", "json"]
+            icmd.extend(_flag("--instructions", squad.get("instructions")))
+            _run_cmd(icmd, dry_run=dry_run, workspace_id=workspace_id)
 
         # Add squad members
         for member in squad.get("members") or []:
@@ -1019,6 +1029,8 @@ def build_template(workspace_id=None):
             }
             if squad.get("description"):
                 sq["description"] = squad["description"]
+            if squad.get("instructions"):
+                sq["instructions"] = squad["instructions"]
             leader_id = squad.get("leader_id")
             if leader_id and leader_id in agent_id_to_name:
                 sq["leader"] = agent_id_to_name[leader_id]

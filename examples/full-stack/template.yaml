@@ -77,6 +77,7 @@ spec:
   squads:
     - name: platform-squad
       description: "Platform engineering squad"
+      instructions: "Focus on infrastructure reliability, cost optimization, and security best practices."
       leader: k8s-architect
       members:
         - name: backend-lead
@@ -85,6 +86,7 @@ spec:
 
     - name: product-squad
       description: "Product development squad"
+      instructions: "Prioritize user-facing features, ship fast, and validate with metrics."
       leader: frontend-lead
 
   autopilots:
