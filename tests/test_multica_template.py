@@ -791,5 +791,177 @@ class TestDryRun(unittest.TestCase):
         self.assertTrue(kwargs.get("dry_run"))
 
 
+class TestDeepMerge(unittest.TestCase):
+    def test_simple_merge(self):
+        base = {"a": 1, "b": 2}
+        overlay = {"b": 3, "c": 4}
+        result = mt._deep_merge(base, overlay)
+        self.assertEqual(result, {"a": 1, "b": 3, "c": 4})
+
+    def test_nested_merge(self):
+        base = {"a": {"x": 1, "y": 2}}
+        overlay = {"a": {"y": 3, "z": 4}}
+        result = mt._deep_merge(dict(base), overlay)
+        self.assertEqual(result, {"a": {"x": 1, "y": 3, "z": 4}})
+
+    def test_overlay_replaces_non_dict(self):
+        base = {"a": "string"}
+        overlay = {"a": {"x": 1}}
+        result = mt._deep_merge(dict(base), overlay)
+        self.assertEqual(result, {"a": {"x": 1}})
+
+
+class TestParseDotNotation(unittest.TestCase):
+    def test_single_key(self):
+        result = mt._parse_dot_notation("name", "foo")
+        self.assertEqual(result, {"name": "foo"})
+
+    def test_nested_key(self):
+        result = mt._parse_dot_notation("agent.model", "gpt-4o")
+        self.assertEqual(result, {"agent": {"model": "gpt-4o"}})
+
+    def test_triple_nested(self):
+        result = mt._parse_dot_notation("a.b.c", 1)
+        self.assertEqual(result, {"a": {"b": {"c": 1}}})
+
+
+class TestInferType(unittest.TestCase):
+    def test_true(self):
+        self.assertTrue(mt._infer_type("true"))
+        self.assertTrue(mt._infer_type("True"))
+
+    def test_false(self):
+        self.assertFalse(mt._infer_type("false"))
+
+    def test_null(self):
+        self.assertIsNone(mt._infer_type("null"))
+        self.assertIsNone(mt._infer_type("None"))
+
+    def test_int(self):
+        self.assertEqual(mt._infer_type("42"), 42)
+
+    def test_float(self):
+        self.assertEqual(mt._infer_type("3.14"), 3.14)
+
+    def test_string(self):
+        self.assertEqual(mt._infer_type("hello"), "hello")
+
+    def test_quoted_string(self):
+        self.assertEqual(mt._infer_type('"hello"'), "hello")
+        self.assertEqual(mt._infer_type("'hello'"), "hello")
+
+
+class TestLoadValues(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_default_values_yaml(self):
+        with open(os.path.join(self.tmpdir, "values.yaml"), "w", encoding="utf-8") as f:
+            yaml.dump({"name": "default", "count": 1}, f)
+        result = mt.load_values(self.tmpdir)
+        self.assertEqual(result["name"], "default")
+        self.assertEqual(result["count"], 1)
+
+    def test_values_file_override(self):
+        with open(os.path.join(self.tmpdir, "values.yaml"), "w", encoding="utf-8") as f:
+            yaml.dump({"name": "default", "count": 1}, f)
+        overlay_path = os.path.join(self.tmpdir, "overlay.yaml")
+        with open(overlay_path, "w", encoding="utf-8") as f:
+            yaml.dump({"count": 2}, f)
+        result = mt.load_values(self.tmpdir, values_files=[overlay_path])
+        self.assertEqual(result["name"], "default")
+        self.assertEqual(result["count"], 2)
+
+    def test_set_override(self):
+        with open(os.path.join(self.tmpdir, "values.yaml"), "w", encoding="utf-8") as f:
+            yaml.dump({"name": "default"}, f)
+        result = mt.load_values(self.tmpdir, set_overrides=["name=overridden", "count=42"])
+        self.assertEqual(result["name"], "overridden")
+        self.assertEqual(result["count"], 42)
+
+    def test_set_dot_notation(self):
+        result = mt.load_values(self.tmpdir, set_overrides=["agent.model=gpt-4o"])
+        self.assertEqual(result["agent"]["model"], "gpt-4o")
+
+    def test_missing_values_file_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            mt.load_values(self.tmpdir, values_files=["/nonexistent.yaml"])
+        self.assertIn("not found", str(ctx.exception))
+
+    def test_invalid_set_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            mt.load_values(self.tmpdir, set_overrides=["badvalue"])
+        self.assertIn("key=value", str(ctx.exception))
+
+
+class TestRenderTemplate(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.template_path = os.path.join(self.tmpdir, "template.yaml")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write(self, text):
+        with open(self.template_path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_no_rendering_when_no_values(self):
+        self._write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: plain\nspec: {}\n")
+        result = mt.render_template(self.tmpdir)
+        self.assertIn("plain", result)
+
+    def test_helm_style_values_substitution(self):
+        self._write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: {{ .Values.appName }}\nspec:\n  workspace:\n    name: {{ .Values.workspaceName }}\n")
+        result = mt.render_template(self.tmpdir, set_overrides=["appName=templated-app", "workspaceName=My Workspace"])
+        data = yaml.safe_load(result)
+        self.assertEqual(data["metadata"]["name"], "templated-app")
+        self.assertEqual(data["spec"]["workspace"]["name"], "My Workspace")
+
+    def test_values_yaml_default(self):
+        with open(os.path.join(self.tmpdir, "values.yaml"), "w", encoding="utf-8") as f:
+            yaml.dump({"appName": "from-values"}, f)
+        self._write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: {{ .Values.appName }}\nspec: {}\n")
+        result = mt.render_template(self.tmpdir)
+        data = yaml.safe_load(result)
+        self.assertEqual(data["metadata"]["name"], "from-values")
+
+    def test_missing_value_raises(self):
+        self._write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: {{ .Values.missing }}\nspec: {}\n")
+        with self.assertRaises(ValueError) as ctx:
+            mt.render_template(self.tmpdir)
+        self.assertIn("Template rendering error", str(ctx.exception))
+
+    def test_values_file_overlay(self):
+        overlay = os.path.join(self.tmpdir, "overlay.yaml")
+        with open(overlay, "w", encoding="utf-8") as f:
+            yaml.dump({"color": "#0f0"}, f)
+        self._write('apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: test\nspec:\n  labels:\n    - name: bug\n      color: "{{ .Values.color }}"\n')
+        result = mt.render_template(self.tmpdir, values_files=[overlay])
+        data = yaml.safe_load(result)
+        self.assertEqual(data["spec"]["labels"][0]["color"], "#0f0")
+
+
+class TestLoadTemplateWithRendering(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_load_with_values(self):
+        tpl_path = os.path.join(self.tmpdir, "template.yaml")
+        with open(tpl_path, "w", encoding="utf-8") as f:
+            f.write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: {{ .Values.name }}\nspec: {}\n")
+        result = mt.load_template(self.tmpdir, set_overrides=["name=rendered"])
+        self.assertEqual(result["metadata"]["name"], "rendered")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

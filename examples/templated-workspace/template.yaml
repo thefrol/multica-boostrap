@@ -1,0 +1,31 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: templated-workspace
+  description: "Example of Helm-style template parameterization"
+spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
+  workspace:
+    name: "{{ .Values.workspaceName }}"
+    description: "{{ .Values.workspaceDescription }}"
+    issuePrefix: "{{ .Values.issuePrefix }}"
+
+  labels:
+    - name: bug
+      color: "#ef4444"
+    - name: feature
+      color: "#22c55e"
+
+  agents:
+    - name: auto-coder
+      model: "{{ .Values.agentModel }}"
+      instructions: "{{ .Values.agentInstructions }}"
+      visibility: workspace
+      maxConcurrentTasks: 3
+
+  squads:
+    - name: "{{ .Values.squadName }}"
+      description: "Development squad"
+      leader: auto-coder

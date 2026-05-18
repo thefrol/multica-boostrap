@@ -113,7 +113,8 @@ multica-template-space/
 │   ├── agent-fleet/          # Multiple agents with skills
 │   ├── create-workspace/     # Create a new workspace from a template
 │   ├── full-stack/           # Agents + squads + autopilots
-│   └── target-workspace/     # Apply to a specific workspace by name
+│   ├── target-workspace/     # Apply to a specific workspace by name
+│   └── templated-workspace/  # Helm-style Jinja2 parameterization
 └── bin/
     ├── multica-template-apply    # Backward-compatible wrapper for 'apply'
     └── multica-template-dump     # Backward-compatible wrapper for 'dump'
@@ -281,6 +282,73 @@ Always use `--dry-run` to preview changes before applying:
 ```bash
 multica-template apply ./examples/full-stack --dry-run
 ```
+
+## Template Variables (v0.3)
+
+Templates support Helm-style Jinja2 parameterization. Use `{{ .Values.key }}` to
+substitute values at apply time.
+
+### Default values
+
+Place a `values.yaml` file next to `template.yaml` to define defaults:
+
+```yaml
+# values.yaml
+workspaceName: "K8s Team"
+agentModel: "gpt-4o"
+```
+
+```yaml
+# template.yaml
+spec:
+  workspace:
+    name: "{{ .Values.workspaceName }}"
+  agents:
+    - name: architect
+      model: "{{ .Values.agentModel }}"
+```
+
+### Environment-specific overlays
+
+Pass additional values files with `--values` (applied in order, later overrides
+earlier):
+
+```bash
+multica-template apply ./examples/templated-workspace \
+  --values ./staging-values.yaml \
+  --values ./secrets-values.yaml
+```
+
+### Ad-hoc overrides
+
+Use `--set key=value` for quick one-off overrides (highest precedence):
+
+```bash
+multica-template apply ./examples/templated-workspace \
+  --set agentModel=gpt-4o-mini \
+  --set workspaceName="Staging"
+```
+
+Dot notation is supported for nested values:
+
+```bash
+multica-template apply ./my-template --set agent.model=gpt-4o
+```
+
+### Multiline values
+
+For multiline strings inside YAML block scalars (`|`), use the Jinja2 `indent`
+filter to preserve indentation:
+
+```yaml
+instructions: |
+  {{ .Values.agentInstructions | indent(2) }}
+```
+
+### Scope
+
+v0.3 supports **simple variable substitution only**. Loops, conditionals, and
+includes are reserved for future releases.
 
 ## Roadmap
 

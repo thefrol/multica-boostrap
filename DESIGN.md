@@ -203,8 +203,8 @@ are converged.
 ## Future Enhancements
 
 1. **Diff output** — Show per-field changes before applying.
-2. **Variables / Parameters** — Allow `{{ .Values.agentModel }}` style
-   interpolation so the same template can be reused across environments.
+2. **Variables / Parameters** — ✅ Implemented. Helm-style `{{ .Values.key }}`
+   interpolation with `values.yaml`, `--values`, and `--set` overrides.
 3. **Git-based catalog** — `multica-template install github.com/org/templates/k8s-team`
 4. **State caching** — Cache `multica * list` results to speed up repeated
    applies.

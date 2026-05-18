@@ -43,6 +43,133 @@ yaml.add_representer(str, _str_representer)
 
 
 # ---------------------------------------------------------------------------
+# Template rendering (Jinja2)
+# ---------------------------------------------------------------------------
+
+def _deep_merge(base, overlay):
+    """Recursively merge overlay into base."""
+    for key, value in overlay.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _parse_dot_notation(key, value):
+    """Parse a dot-notation key like 'agent.model' into a nested dict."""
+    parts = key.split(".")
+    result = {}
+    current = result
+    for part in parts[:-1]:
+        current[part] = {}
+        current = current[part]
+    current[parts[-1]] = value
+    return result
+
+
+def _infer_type(value):
+    """Infer the Python type of a --set value string."""
+    value = value.strip()
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    if value.lower() in ("null", "none"):
+        return None
+    try:
+        if "." in value and not (value.startswith("0") and len(value) > 1 and not value.startswith("0.")):
+            # Avoid treating octal-like strings as floats
+            return float(value)
+        return int(value)
+    except ValueError:
+        pass
+    # Strip explicit quotes
+    if len(value) >= 2:
+        if (value.startswith('"') and value.endswith('"')) or \
+           (value.startswith("'") and value.endswith("'")):
+            return value[1:-1]
+    return value
+
+
+def load_values(directory, values_files=None, set_overrides=None):
+    """Load and merge values from values.yaml, --values files, and --set overrides.
+
+    Returns a dict of merged values.
+    """
+    merged = {}
+
+    # 1. Default values.yaml in template directory
+    default_values_path = os.path.join(directory, "values.yaml")
+    if os.path.isfile(default_values_path):
+        with open(default_values_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, dict):
+            merged.update(data)
+
+    # 2. Explicit --values files (applied in order)
+    for vf in (values_files or []):
+        if not os.path.isfile(vf):
+            raise ValueError(f"Values file not found: {vf}")
+        with open(vf, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, dict):
+            _deep_merge(merged, data)
+
+    # 3. --set overrides (highest precedence)
+    for override in (set_overrides or []):
+        if "=" not in override:
+            raise ValueError(f"--set override must be key=value, got: {override}")
+        key, raw_value = override.split("=", 1)
+        value = _infer_type(raw_value)
+        nested = _parse_dot_notation(key, value)
+        _deep_merge(merged, nested)
+
+    return merged
+
+
+def render_template(directory, values_files=None, set_overrides=None):
+    """Read template.yaml, load values, render with Jinja2, return rendered text."""
+    path = os.path.join(directory, "template.yaml")
+    if not os.path.isfile(path):
+        raise ValueError(f"template.yaml not found in {directory}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    values = load_values(directory, values_files=values_files, set_overrides=set_overrides)
+
+    # Fast path: no values and no Jinja2 syntax
+    if not values and "{{" not in raw and "{%" not in raw:
+        return raw
+
+    try:
+        import jinja2
+    except ImportError:
+        raise ImportError(
+            "Jinja2 is required for template rendering but is not installed. "
+            "Install it with: pip install jinja2"
+        )
+
+    # Helm-style {{ .Values.key }} -> {{ Values.key }} for Jinja2 compatibility
+    raw = raw.replace("{{ .Values.", "{{ Values.")
+    raw = raw.replace("{{- .Values.", "{{- Values.")
+
+    env = jinja2.Environment(
+        undefined=jinja2.StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    template_obj = env.from_string(raw)
+    try:
+        rendered = template_obj.render(Values=values)
+    except jinja2.UndefinedError as e:
+        raise ValueError(f"Template rendering error: {e}")
+
+    return rendered
+
+
+# ---------------------------------------------------------------------------
 # Common helpers
 # ---------------------------------------------------------------------------
 
@@ -210,13 +337,13 @@ def _validate_keys(obj, allowed, path):
         raise ValueError(f"{path} contains unknown keys: {', '.join(sorted(unknown))}")
 
 
-def load_template(directory):
+def load_template(directory, values_files=None, set_overrides=None):
     path = os.path.join(directory, "template.yaml")
     if not os.path.isfile(path):
         raise ValueError(f"template.yaml not found in {directory}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    raw = render_template(directory, values_files=values_files, set_overrides=set_overrides)
+    data = yaml.safe_load(raw)
 
     if not isinstance(data, dict):
         raise ValueError("template.yaml must contain a mapping")
@@ -1126,7 +1253,7 @@ def cmd_apply(args):
         print("--ref can only be used with a GitHub source.", file=sys.stderr)
         sys.exit(1)
 
-    template = load_template(source)
+    template = load_template(source, values_files=getattr(args, "values", None), set_overrides=getattr(args, "set", None))
 
     target_ws = resolve_workspace(args, template, dry_run=args.dry_run)
     if target_ws:
@@ -1300,6 +1427,18 @@ def main():
         "--ref",
         dest="ref",
         help="Git ref (branch or tag) to checkout when using a GitHub source",
+    )
+    apply_parser.add_argument(
+        "--values",
+        dest="values",
+        action="append",
+        help="Path to a values YAML file (can be given multiple times; later files override earlier ones)",
+    )
+    apply_parser.add_argument(
+        "--set",
+        dest="set",
+        action="append",
+        help="Set a value override (e.g. --set agent.model=gpt-4o). Can be given multiple times.",
     )
     apply_parser.set_defaults(func=cmd_apply)
 

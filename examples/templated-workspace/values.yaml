@@ -1,0 +1,6 @@
+workspaceName: "Templated Demo"
+workspaceDescription: "A workspace demonstrating Jinja2 template values"
+issuePrefix: "TPL"
+agentModel: "gpt-4o"
+agentInstructions: "You are a helpful coding assistant. Always write clean, tested code."
+squadName: "dev-squad"
