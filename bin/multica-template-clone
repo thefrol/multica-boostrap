@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""
+multica-template-clone — Backward-compatible wrapper for 'multica-template clone'.
+
+Usage:
+    multica-template-clone --from-name "Source Workspace" --to-name "New Workspace" --create-workspace
+    multica-template-clone --from-id <uuid> --to-id <uuid> --dry-run
+"""
+
+import os
+import subprocess
+import sys
+
+
+def main():
+    # Forward everything to the unified CLI
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    unified = os.path.join(script_dir, "multica-template")
+    cmd = [sys.executable, unified, "clone"] + sys.argv[1:]
+    sys.exit(subprocess.run(cmd).returncode)
+
+
+if __name__ == "__main__":
+    main()

@@ -1108,8 +1108,12 @@ def cmd_clone(args):
         workspaces = _parse_workspace_list_table()
         if args.to_name not in workspaces:
             if args.create_workspace:
-                print(f'Target workspace "{args.to_name}" not found. Creating...')
-                target_ws = create_workspace(args.to_name)
+                if args.dry_run:
+                    print(f'Target workspace "{args.to_name}" not found. Would create (dry-run).')
+                    target_ws = DRY_RUN_ID
+                else:
+                    print(f'Target workspace "{args.to_name}" not found. Creating...')
+                    target_ws = create_workspace(args.to_name)
             else:
                 print(
                     f'Target workspace "{args.to_name}" not found. '
@@ -1141,12 +1145,18 @@ def cmd_clone(args):
     # Load and apply to target
     template = load_template(tmpdir)
 
+    # Remove workspace name from the template so we don't rename the target
+    spec = template.get("spec", {})
+    if spec.get("workspace", {}).get("name"):
+        del spec["workspace"]["name"]
+        if not spec["workspace"]:
+            del spec["workspace"]
+
     print("Building registry from target workspace state...")
     registry = build_registry(workspace_id=target_ws)
     print("Applying resources...\n")
     sys.stdout.flush()
 
-    spec = template.get("spec", {})
     apply_workspace(spec, dry_run=args.dry_run, workspace_id=target_ws)
     apply_labels(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
     apply_skills(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
