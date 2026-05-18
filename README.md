@@ -1,5 +1,19 @@
 # Multica Template Space
 
+> **Your Multica workspace as code. Version-controlled. Reproducible. One command away.**
+
+Stop configuring workspaces by hand. Multica Template Space lets you declare your entire team setup — agents, skills, squads, labels, autopilots — in a single `template.yaml` and provision it with one command. Back it up in git. Clone it to a new workspace. Share it with your team.
+
+## The Pain It Cures
+
+| Pain | How we fix it |
+|------|---------------|
+| **Slow workspace setup** | Spin up a complete working environment in seconds, not hours. |
+| **Manual team bootstrapping** | Add a full research team, dev squad, or ops crew with a single `multica-template apply`. |
+| **Lost configuration** | Store your workspace and team definitions in git. Restore, migrate, or duplicate anytime. |
+
+## What It Is
+
 A declarative provisioning engine for Multica workspaces. Think of it as
 **Helm for Multica** — a human-readable catalog of workspace templates that
 creates and updates agents, skills, labels, squads, and autopilots from a
