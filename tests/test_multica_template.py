@@ -595,6 +595,27 @@ class TestApplyAutopilots(unittest.TestCase):
         self.assertIn("update", cmd)
         self.assertIn("ap1-old", cmd)
 
+    @patch("multica_template._run_cmd")
+    def test_create_omits_status(self, mock_run):
+        mock_run.return_value = {"id": "ap1"}
+        registry = {("agent", "ag1"): "a1"}
+        spec = {"autopilots": [{"name": "ap1", "agent": "ag1", "mode": "create_issue", "status": "active"}]}
+        mt.apply_autopilots(spec, registry, dry_run=False, workspace_id="ws1")
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("create", cmd)
+        self.assertNotIn("--status", cmd)
+
+    @patch("multica_template._run_cmd")
+    def test_update_includes_status(self, mock_run):
+        mock_run.return_value = {"id": "ap1"}
+        registry = {("agent", "ag1"): "a1", ("autopilot", "ap1"): "ap1-old"}
+        spec = {"autopilots": [{"name": "ap1", "agent": "ag1", "mode": "create_issue", "status": "paused"}]}
+        mt.apply_autopilots(spec, registry, dry_run=False, workspace_id="ws1")
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("update", cmd)
+        self.assertIn("--status", cmd)
+        self.assertIn("paused", cmd)
+
 
 class TestParseWorkspaceListTable(unittest.TestCase):
     @patch("subprocess.run")
