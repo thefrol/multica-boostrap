@@ -14,9 +14,13 @@ import sys
 
 
 def main():
-    # Forward everything to the unified CLI
+    # Forward everything to the unified CLI (repo root or installed path)
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    unified = os.path.join(script_dir, "multica-template")
+    repo_root = os.path.dirname(script_dir)
+    unified = os.path.join(repo_root, "multica-template")
+    if not os.path.isfile(unified):
+        # Fallback to installed PATH location
+        unified = "multica-template"
     cmd = [sys.executable, unified, "dump"] + sys.argv[1:]
     sys.exit(subprocess.run(cmd).returncode)
 

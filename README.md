@@ -7,6 +7,20 @@ single YAML file.
 
 ## Quick Start
 
+### Install
+
+```bash
+# One-line install (piped)
+curl -sSL https://raw.githubusercontent.com/thefrol/multica-boostrap/main/install.sh | bash
+
+# Or two-step (review before running)
+curl -sSL -o install.sh https://raw.githubusercontent.com/thefrol/multica-boostrap/main/install.sh
+cat install.sh | less
+bash install.sh
+```
+
+### Usage
+
 ```bash
 # Apply a template to the current workspace
 multica-template apply ./examples/basic-workspace
@@ -90,6 +104,8 @@ multica-template-space/
 ├── README.md
 ├── DESIGN.md                 # Architecture & design decisions
 ├── IMPLEMENTATION.md         # Step-by-step build guide for the engine
+├── install.sh                # Web installer (curl|bash)
+├── multica-template          # Unified CLI entry point
 ├── schema/
 │   └── template-schema.yaml  # Formal template schema
 ├── examples/
@@ -99,7 +115,6 @@ multica-template-space/
 │   ├── full-stack/           # Agents + squads + autopilots
 │   └── target-workspace/     # Apply to a specific workspace by name
 └── bin/
-    ├── multica-template          # Unified CLI entry point
     ├── multica-template-apply    # Backward-compatible wrapper for 'apply'
     └── multica-template-dump     # Backward-compatible wrapper for 'dump'
 ```
