@@ -580,6 +580,96 @@ class TestApplyAgents(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         self.assertIn("r1", cmd)
 
+    @patch("multica_template.get_available_runtimes", return_value=[{"id": "r1", "name": "default"}])
+    @patch("multica_template._run_cmd")
+    @patch("multica_template._run_json")
+    def test_update_skips_unchanged_cli_settings(self, mock_run_json, mock_run_cmd, mock_runtimes):
+        mock_run_json.return_value = {
+            "custom_args": ["--foo"],
+            "custom_env": {"K": "V"},
+        }
+        mock_run_cmd.return_value = {"id": "a1"}
+        registry = {("agent", "ag1"): "a1"}
+        spec = {
+            "agents": [
+                {
+                    "name": "ag1",
+                    "runtimeId": "r1",
+                    "customArgs": ["--foo"],
+                    "customEnv": {"K": "V"},
+                }
+            ]
+        }
+        mt.apply_agents(spec, registry, dry_run=False, workspace_id="ws1")
+        cmd = mock_run_cmd.call_args[0][0]
+        self.assertIn("update", cmd)
+        self.assertNotIn("--custom-args", cmd)
+        self.assertNotIn("--custom-env", cmd)
+
+    @patch("multica_template.get_available_runtimes", return_value=[{"id": "r1", "name": "default"}])
+    @patch("multica_template._run_cmd")
+    @patch("multica_template._run_json")
+    def test_update_includes_changed_cli_settings(self, mock_run_json, mock_run_cmd, mock_runtimes):
+        mock_run_json.return_value = {
+            "custom_args": ["--old"],
+            "custom_env": {"OLD": "val"},
+        }
+        mock_run_cmd.return_value = {"id": "a1"}
+        registry = {("agent", "ag1"): "a1"}
+        spec = {
+            "agents": [
+                {
+                    "name": "ag1",
+                    "runtimeId": "r1",
+                    "customArgs": ["--new"],
+                    "customEnv": {"NEW": "val"},
+                }
+            ]
+        }
+        mt.apply_agents(spec, registry, dry_run=False, workspace_id="ws1")
+        cmd = mock_run_cmd.call_args[0][0]
+        self.assertIn("update", cmd)
+        self.assertIn("--custom-args", cmd)
+        self.assertIn("--custom-env", cmd)
+
+    @patch("multica_template.get_available_runtimes", return_value=[{"id": "r1", "name": "default"}])
+    @patch("multica_template._run_cmd")
+    @patch("multica_template._run_json")
+    def test_update_omits_unspecified_cli_settings(self, mock_run_json, mock_run_cmd, mock_runtimes):
+        mock_run_json.return_value = {
+            "custom_args": ["--foo"],
+            "custom_env": {"K": "V"},
+        }
+        mock_run_cmd.return_value = {"id": "a1"}
+        registry = {("agent", "ag1"): "a1"}
+        spec = {"agents": [{"name": "ag1", "runtimeId": "r1"}]}
+        mt.apply_agents(spec, registry, dry_run=False, workspace_id="ws1")
+        cmd = mock_run_cmd.call_args[0][0]
+        self.assertIn("update", cmd)
+        self.assertNotIn("--custom-args", cmd)
+        self.assertNotIn("--custom-env", cmd)
+
+    @patch("multica_template.get_available_runtimes", return_value=[{"id": "r1", "name": "default"}])
+    @patch("multica_template._run_cmd")
+    def test_create_always_includes_cli_settings(self, mock_run_cmd, mock_runtimes):
+        mock_run_cmd.return_value = {"id": "a1"}
+        registry = {}
+        spec = {
+            "agents": [
+                {
+                    "name": "ag1",
+                    "runtimeId": "r1",
+                    "customArgs": ["--foo"],
+                    "customEnv": {"K": "V"},
+                }
+            ]
+        }
+        mt.apply_agents(spec, registry, dry_run=False, workspace_id="ws1")
+        cmd = mock_run_cmd.call_args[0][0]
+        self.assertIn("create", cmd)
+        self.assertIn("--custom-args", cmd)
+        self.assertIn("--custom-env", cmd)
+
 
 class TestApplySquads(unittest.TestCase):
     @patch("multica_template.fetch_squad_members", return_value=[])

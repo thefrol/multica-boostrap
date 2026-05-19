@@ -822,8 +822,28 @@ def apply_agents(spec, registry, dry_run=False, workspace_id=None, source_dir=No
         cmd.extend(_flag("--instructions", agent.get("instructions")))
         cmd.extend(_flag("--visibility", agent.get("visibility")))
         cmd.extend(_flag("--max-concurrent-tasks", agent.get("maxConcurrentTasks")))
-        cmd.extend(_flag("--custom-args", agent.get("customArgs")))
-        cmd.extend(_flag("--custom-env", custom_env if custom_env else None))
+        # For existing agents, skip sending customArgs/customEnv if they are unchanged.
+        if exists and not dry_run and (agent.get("customArgs") is not None or custom_env):
+            current = _run_json(
+                ["multica", "agent", "get", registry[key], "--output", "json"],
+                workspace_id=workspace_id,
+            )
+            if current and isinstance(current, dict):
+                current_args = current.get("custom_args")
+                current_env = current.get("custom_env")
+                desired_args = agent.get("customArgs")
+                desired_env = custom_env if custom_env else None
+                if desired_args is not None and current_args != desired_args:
+                    cmd.extend(_flag("--custom-args", desired_args))
+                if desired_env is not None and current_env != desired_env:
+                    cmd.extend(_flag("--custom-env", desired_env))
+            else:
+                # Fallback if we can't read current state
+                cmd.extend(_flag("--custom-args", agent.get("customArgs")))
+                cmd.extend(_flag("--custom-env", custom_env if custom_env else None))
+        else:
+            cmd.extend(_flag("--custom-args", agent.get("customArgs")))
+            cmd.extend(_flag("--custom-env", custom_env if custom_env else None))
         result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         agent_id = registry.get(key)
