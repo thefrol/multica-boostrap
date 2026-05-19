@@ -67,6 +67,8 @@ spec:
         - string
       customEnv:                    # Optional. JSON object of env vars.
         key: value
+      envFile: string               # Optional. Path to a .env file (relative to template dir).
+                                    # Loaded into customEnv; customEnv values override envFile.
       skills:                       # Optional. List of skill names to assign.
         - string
 

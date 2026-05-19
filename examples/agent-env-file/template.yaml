@@ -1,0 +1,26 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: agent-env-file
+  description: "Demonstrates loading agent credentials from a .env file"
+spec:
+  targetWorkspace:
+    id: "b025515a-259e-4679-963d-35ba3fce947a"
+
+  workspace:
+    name: "Agent Env File"
+    description: "Workspace showing .env file integration"
+    issuePrefix: "ENV"
+
+  agents:
+    - name: secure-coder
+      description: "Agent with credentials loaded from .env file"
+      runtimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
+      instructions: |
+        You are a coding agent with secure credential access.
+        Use the provided environment variables responsibly.
+      visibility: workspace
+      maxConcurrentTasks: 4
+      envFile: .env
+      customEnv:
+        LOG_LEVEL: debug
