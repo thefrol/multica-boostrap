@@ -318,13 +318,32 @@ def _slugify(name):
     return slug or "workspace"
 
 
+def _read_multica_config():
+    """Read the multica CLI config file and return a dict with server_url and token."""
+    config_path = os.path.expanduser("~/.multica/config.json")
+    if not os.path.isfile(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def create_workspace(name, slug=None, description=None):
     """Create a workspace via the Multica REST API."""
     server = os.environ.get("MULTICA_SERVER_URL")
     token = os.environ.get("MULTICA_TOKEN")
+
+    if not server or not token:
+        config = _read_multica_config()
+        server = server or config.get("server_url")
+        token = token or config.get("token")
+
     if not server or not token:
         print(
-            "ERROR: MULTICA_SERVER_URL and MULTICA_TOKEN must be set to create a workspace.",
+            "ERROR: Unable to create workspace. Either set MULTICA_SERVER_URL and MULTICA_TOKEN, "
+            "or authenticate with 'multica login'.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -360,9 +379,7 @@ def create_workspace(name, slug=None, description=None):
         sys.exit(1)
 
 
-# Test workspace UUID used as the default target for all template operations.
 DRY_RUN_ID = "DRY-RUN"
-DEFAULT_TEST_WORKSPACE = "b025515a-259e-4679-963d-35ba3fce947a"
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +504,7 @@ def resolve_workspace(args, template=None, dry_run=False):
     Precedence:
         --workspace-id > --workspace-name > spec.targetWorkspace.id >
         spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var >
-        DEFAULT_TEST_WORKSPACE
+        current workspace (None)
     """
     spec = (template.get("spec") or {}) if template else {}
     target = spec.get("targetWorkspace") or {}
@@ -535,11 +552,39 @@ def resolve_workspace(args, template=None, dry_run=False):
             sys.exit(1)
         return workspaces[name]
 
+    # --create-workspace without an explicit name: derive from template
+    if getattr(args, "create_workspace", False):
+        name = None
+        if template:
+            name = template.get("spec", {}).get("workspace", {}).get("name")
+            if not name:
+                name = template.get("metadata", {}).get("name")
+        if not name:
+            print(
+                "ERROR: --create-workspace requires a workspace name. "
+                "Use --workspace-name, set spec.workspace.name in the template, "
+                "or set metadata.name.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        workspaces = _parse_workspace_list_table()
+        if name in workspaces:
+            return workspaces[name]
+        if dry_run:
+            print(f'Workspace "{name}" not found. Would create (dry-run).')
+            return DRY_RUN_ID
+        print(f'Workspace "{name}" not found. Creating...')
+        ws_description = None
+        if template and template.get("spec", {}).get("workspace", {}).get("description"):
+            ws_description = template["spec"]["workspace"]["description"]
+        return create_workspace(name, description=ws_description)
+
     env_ws = os.environ.get("MULTICA_WORKSPACE_ID")
     if env_ws:
         return env_ws
 
-    return DEFAULT_TEST_WORKSPACE
+    # None means "use the current workspace" (multica CLI default)
+    return None
 
 
 def resolve_workspace_simple(args):

@@ -263,6 +263,26 @@ class TestSlugify(unittest.TestCase):
         self.assertEqual(mt._slugify("!!!"), "workspace")
 
 
+class TestReadMulticaConfig(unittest.TestCase):
+    @patch("os.path.isfile", return_value=True)
+    @patch("builtins.open", new_callable=unittest.mock.mock_open, read_data=json.dumps({"server_url": "https://example.com", "token": "tok123"}))
+    def test_reads_config(self, mock_open, mock_isfile):
+        result = mt._read_multica_config()
+        self.assertEqual(result["server_url"], "https://example.com")
+        self.assertEqual(result["token"], "tok123")
+
+    @patch("os.path.isfile", return_value=False)
+    def test_missing_config_returns_empty(self, mock_isfile):
+        result = mt._read_multica_config()
+        self.assertEqual(result, {})
+
+    @patch("os.path.isfile", return_value=True)
+    @patch("builtins.open", new_callable=unittest.mock.mock_open, read_data="not-json")
+    def test_invalid_json_returns_empty(self, mock_open, mock_isfile):
+        result = mt._read_multica_config()
+        self.assertEqual(result, {})
+
+
 class TestResolveWorkspace(unittest.TestCase):
     def test_cli_workspace_id_wins(self):
         args = FakeArgs(workspace_id="cli-id")
@@ -309,14 +329,41 @@ class TestResolveWorkspace(unittest.TestCase):
         result = mt.resolve_workspace(args, _make_template())
         self.assertEqual(result, "env-id")
 
-    def test_default_test_workspace(self):
+    def test_fallback_to_current_workspace(self):
         args = FakeArgs()
         # Ensure env var is not set
         env = os.environ.copy()
         env.pop("MULTICA_WORKSPACE_ID", None)
         with patch.dict(os.environ, env, clear=True):
             result = mt.resolve_workspace(args, _make_template())
-        self.assertEqual(result, mt.DEFAULT_TEST_WORKSPACE)
+        self.assertIsNone(result)
+
+    @patch("multica_template._parse_workspace_list_table", return_value={})
+    @patch("multica_template.create_workspace", return_value="new-id")
+    def test_create_workspace_without_name_uses_template_name(self, mock_create, mock_list):
+        args = FakeArgs(create_workspace=True)
+        tpl = _make_template(spec={"workspace": {"name": "My Team"}})
+        result = mt.resolve_workspace(args, tpl)
+        self.assertEqual(result, "new-id")
+        mock_create.assert_called_once_with("My Team", description=None)
+
+    @patch("multica_template._parse_workspace_list_table", return_value={})
+    @patch("multica_template.create_workspace", return_value="new-id")
+    def test_create_workspace_without_name_uses_metadata_name(self, mock_create, mock_list):
+        args = FakeArgs(create_workspace=True)
+        tpl = _make_template()
+        result = mt.resolve_workspace(args, tpl)
+        self.assertEqual(result, "new-id")
+        mock_create.assert_called_once_with("test-template", description=None)
+
+    @patch("multica_template._parse_workspace_list_table", return_value={})
+    def test_create_workspace_without_name_fails_when_no_name_available(self, mock_list):
+        args = FakeArgs(create_workspace=True)
+        tpl = _make_template()
+        tpl["metadata"]["name"] = None
+        tpl["spec"] = {}
+        with self.assertRaises(SystemExit):
+            mt.resolve_workspace(args, tpl)
 
     @patch("multica_template._parse_workspace_list_table", return_value={})
     def test_dry_run_returns_dry_run_id(self, mock_list):
@@ -714,7 +761,10 @@ class TestParseWorkspaceListTable(unittest.TestCase):
     def test_parse(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0,
-            stdout="ID\tNAME\nws1\tTeam A\nws2\tTeam B\n",
+            stdout=json.dumps([
+                {"id": "ws1", "name": "Team A"},
+                {"id": "ws2", "name": "Team B"},
+            ]),
         )
         result = mt._parse_workspace_list_table()
         self.assertEqual(result, {"Team A": "ws1", "Team B": "ws2"})
