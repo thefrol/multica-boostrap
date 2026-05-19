@@ -1164,7 +1164,7 @@ def fetch_squad_members(squad_id, workspace_id=None):
 
 def fetch_workspace_members_list(workspace_id=None):
     """Fetch workspace members list."""
-    return _run_json(["multica", "workspace", "members", "--output", "json"], workspace_id=workspace_id) or []
+    return _run_json(["multica", "workspace", "member", "list", "--output", "json"], workspace_id=workspace_id) or []
 
 
 def fetch_autopilots(workspace_id=None):
