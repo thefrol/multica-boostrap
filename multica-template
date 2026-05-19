@@ -659,6 +659,12 @@ def apply_squads(spec, registry, dry_run=False, workspace_id=None):
             _run_cmd(icmd, dry_run=dry_run, workspace_id=workspace_id)
 
         # Add squad members
+        # Pre-fetch existing members to skip already-present ones (idempotent apply)
+        existing_members = set()
+        if squad_id and not dry_run:
+            for m in fetch_squad_members(squad_id, workspace_id=workspace_id):
+                existing_members.add((m.get("member_id"), m.get("member_type", "agent")))
+
         for member in squad.get("members") or []:
             member_name = member.get("name")
             member_type = member.get("type", "agent")
@@ -686,6 +692,10 @@ def apply_squads(spec, registry, dry_run=False, workspace_id=None):
                     f"[squad] {name} — WARNING: unknown member type '{member_type}', skipping",
                     file=sys.stderr,
                 )
+                continue
+
+            if (member_id, member_type) in existing_members:
+                print(f"[squad] {name} — member {member_name} already present, skipping")
                 continue
 
             print(f"[squad] {name} — adding member {member_name} ({member_type}, role={role})")
