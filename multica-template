@@ -279,27 +279,34 @@ def _get_id(result):
 
 
 def _parse_workspace_list_table():
-    """Run 'multica workspace list' and parse the ID/NAME table."""
+    """Run 'multica workspace list' and parse the ID/NAME mapping."""
     result = subprocess.run(
-        ["multica", "workspace", "list"],
+        ["multica", "workspace", "list", "--output", "json"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        print(f"Error running command: multica workspace list", file=sys.stderr)
+        print(f"Error running command: multica workspace list --output json", file=sys.stderr)
         print(f"stderr: {result.stderr}", file=sys.stderr)
         sys.exit(result.returncode)
 
-    lines = result.stdout.strip().splitlines()
+    stdout = result.stdout.strip()
+    if not stdout:
+        return {}
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        print(f"Error parsing workspace list JSON: {e}", file=sys.stderr)
+        sys.exit(1)
+
     workspaces = {}
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("ID"):
-            continue
-        parts = line.split(None, 1)
-        if len(parts) >= 2:
-            ws_id = parts[0]
-            ws_name = parts[1]
-            workspaces[ws_name] = ws_id
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                ws_id = item.get("id")
+                ws_name = item.get("name")
+                if ws_id and ws_name:
+                    workspaces[ws_name] = ws_id
     return workspaces
 
 
