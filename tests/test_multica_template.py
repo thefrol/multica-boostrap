@@ -156,6 +156,25 @@ class TestLoadTemplate(unittest.TestCase):
             mt.load_template(self.tmpdir)
         self.assertIn("agent", str(ctx.exception))
 
+    def test_autopilot_with_valid_trigger(self):
+        tpl = _make_template()
+        tpl["spec"]["autopilots"] = [
+            {"name": "ap1", "agent": "ag1", "mode": "run_only", "triggers": [{"cron": "0 9 * * *", "timezone": "UTC"}]}
+        ]
+        self._write(tpl)
+        result = mt.load_template(self.tmpdir)
+        self.assertEqual(result["spec"]["autopilots"][0]["triggers"][0]["cron"], "0 9 * * *")
+
+    def test_autopilot_with_invalid_trigger_key(self):
+        tpl = _make_template()
+        tpl["spec"]["autopilots"] = [
+            {"name": "ap1", "agent": "ag1", "mode": "run_only", "triggers": [{"cron": "0 9 * * *", "bad_key": "x"}]}
+        ]
+        self._write(tpl)
+        with self.assertRaises(ValueError) as ctx:
+            mt.load_template(self.tmpdir)
+        self.assertIn("unknown keys", str(ctx.exception))
+
     def test_full_spec_passes(self):
         tpl = _make_template(spec={
             "targetWorkspace": {"id": "ws-id", "name": "ws", "create": True, "slug": "ws"},
@@ -193,6 +212,7 @@ class TestLoadTemplate(unittest.TestCase):
                     "description": "d",
                     "priority": "high",
                     "status": "active",
+                    "triggers": [{"cron": "0 9 * * *", "timezone": "UTC", "enabled": True, "label": "daily"}],
                 }
             ],
         })
@@ -367,6 +387,21 @@ class TestBuildRegistry(unittest.TestCase):
         ]
         registry = mt.build_registry(workspace_id="ws1")
         self.assertEqual(registry[("autopilot", "T1")], "ap1")
+
+
+class TestFetchAutopilots(unittest.TestCase):
+    @patch("multica_template._run_json")
+    def test_includes_triggers(self, mock_run):
+        mock_run.side_effect = [
+            {"autopilots": [{"id": "ap1", "title": "Daily"}]},
+            {
+                "autopilot": {"id": "ap1", "title": "Daily", "assignee_id": "a1", "execution_mode": "create_issue"},
+                "triggers": [{"id": "t1", "cron_expression": "0 9 * * *", "timezone": "UTC", "enabled": True}],
+            },
+        ]
+        result = mt.fetch_autopilots(workspace_id="ws1")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["triggers"][0]["cron_expression"], "0 9 * * *")
 
 
 class TestApplyWorkspace(unittest.TestCase):
@@ -633,6 +668,46 @@ class TestApplyAutopilots(unittest.TestCase):
         self.assertIn("--status", cmd)
         self.assertIn("paused", cmd)
 
+    @patch("multica_template._run_json")
+    @patch("multica_template._run_cmd")
+    def test_create_adds_trigger(self, mock_run, mock_run_json):
+        mock_run.return_value = {"id": "ap1"}
+        mock_run_json.return_value = {"triggers": []}
+        registry = {("agent", "ag1"): "a1"}
+        spec = {"autopilots": [{"name": "ap1", "agent": "ag1", "mode": "run_only", "triggers": [{"cron": "0 9 * * *", "timezone": "UTC"}]}]}
+        mt.apply_autopilots(spec, registry, dry_run=False, workspace_id="ws1")
+        # First call is create, second is trigger-add
+        self.assertEqual(mock_run.call_count, 2)
+        trig_cmd = mock_run.call_args_list[1][0][0]
+        self.assertIn("trigger-add", trig_cmd)
+        self.assertIn("ap1", trig_cmd)
+        self.assertIn("0 9 * * *", trig_cmd)
+
+    @patch("multica_template._run_json")
+    @patch("multica_template._run_cmd")
+    def test_update_existing_trigger(self, mock_run, mock_run_json):
+        mock_run.return_value = {"id": "ap1"}
+        mock_run_json.return_value = {"triggers": [{"id": "t1", "cron_expression": "0 9 * * *", "timezone": "UTC", "enabled": True}]}
+        registry = {("agent", "ag1"): "a1", ("autopilot", "ap1"): "ap1-old"}
+        spec = {"autopilots": [{"name": "ap1", "agent": "ag1", "mode": "run_only", "triggers": [{"cron": "0 9 * * *", "timezone": "Europe/Moscow", "enabled": False}]}]}
+        mt.apply_autopilots(spec, registry, dry_run=False, workspace_id="ws1")
+        # First call is update autopilot, second is trigger-update
+        self.assertEqual(mock_run.call_count, 2)
+        trig_cmd = mock_run.call_args_list[1][0][0]
+        self.assertIn("trigger-update", trig_cmd)
+        self.assertIn("ap1", trig_cmd)
+        self.assertIn("t1", trig_cmd)
+        self.assertIn("Europe/Moscow", trig_cmd)
+
+    @patch("multica_template._run_cmd")
+    def test_dry_run_skips_trigger_sync(self, mock_run):
+        mock_run.return_value = {"id": "ap1"}
+        registry = {("agent", "ag1"): "a1"}
+        spec = {"autopilots": [{"name": "ap1", "agent": "ag1", "mode": "run_only", "triggers": [{"cron": "0 9 * * *"}]}]}
+        mt.apply_autopilots(spec, registry, dry_run=True, workspace_id="ws1")
+        # Only the create call, no trigger sync in dry-run
+        self.assertEqual(mock_run.call_count, 1)
+
 
 class TestParseWorkspaceListTable(unittest.TestCase):
     @patch("subprocess.run")
@@ -719,7 +794,7 @@ class TestBuildTemplate(unittest.TestCase):
             [{"id": "sq1", "name": "sq1", "description": "d", "leader_id": "a1"}],
             # fetch_autopilots list + detail
             {"autopilots": [{"id": "ap1", "title": "Daily", "assignee_id": "a1", "execution_mode": "create_issue", "description": "d", "priority": "high", "status": "active"}]},
-            {"autopilot": {"id": "ap1", "title": "Daily", "assignee_id": "a1", "execution_mode": "create_issue", "description": "d", "priority": "high", "status": "active"}},
+            {"autopilot": {"id": "ap1", "title": "Daily", "assignee_id": "a1", "execution_mode": "create_issue", "description": "d", "priority": "high", "status": "active"}, "triggers": [{"id": "t1", "cron_expression": "0 9 * * *", "timezone": "UTC", "enabled": True, "label": "daily"}]},
             # fetch_workspace_members_list
             [],
             # fetch_squad_members
@@ -739,6 +814,10 @@ class TestBuildTemplate(unittest.TestCase):
         self.assertEqual(spec["squads"][0]["members"][0]["role"], "coder")
         self.assertEqual(spec["autopilots"][0]["agent"], "ag1")
         self.assertEqual(spec["autopilots"][0]["mode"], "create_issue")
+        self.assertEqual(spec["autopilots"][0]["triggers"][0]["cron"], "0 9 * * *")
+        self.assertEqual(spec["autopilots"][0]["triggers"][0]["timezone"], "UTC")
+        self.assertEqual(spec["autopilots"][0]["triggers"][0]["enabled"], True)
+        self.assertEqual(spec["autopilots"][0]["triggers"][0]["label"], "daily")
 
 
 class TestWriteTemplate(unittest.TestCase):
@@ -769,6 +848,20 @@ class TestStrRepresenter(unittest.TestCase):
         data = {"key": "hello"}
         dumped = yaml.dump(data)
         self.assertNotIn("|", dumped)
+
+
+class TestNormalizeText(unittest.TestCase):
+    def test_strips_trailing_whitespace(self):
+        self.assertEqual(mt._normalize_text("hello   \nworld  "), "hello\nworld")
+
+    def test_preserves_newlines(self):
+        self.assertEqual(mt._normalize_text("a\n\nb"), "a\n\nb")
+
+    def test_non_string_passthrough(self):
+        self.assertEqual(mt._normalize_text(42), 42)
+
+    def test_no_trailing_spaces_unchanged(self):
+        self.assertEqual(mt._normalize_text("hello\nworld"), "hello\nworld")
 
 
 class TestRuntimeResolution(unittest.TestCase):
