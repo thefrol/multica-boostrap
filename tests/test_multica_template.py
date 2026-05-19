@@ -500,9 +500,10 @@ class TestApplyAgents(unittest.TestCase):
 
 
 class TestApplySquads(unittest.TestCase):
+    @patch("multica_template.fetch_squad_members", return_value=[])
     @patch("multica_template.fetch_workspace_members_list", return_value=[])
     @patch("multica_template._run_cmd")
-    def test_create(self, mock_run, mock_ws_members):
+    def test_create(self, mock_run, mock_ws_members, mock_fetch_members):
         mock_run.return_value = {"id": "sq1"}
         registry = {("agent", "leader1"): "a1"}
         spec = {"squads": [{"name": "squad1", "leader": "leader1"}]}
@@ -513,17 +514,19 @@ class TestApplySquads(unittest.TestCase):
         self.assertIn("a1", cmd)
         self.assertEqual(registry[("squad", "squad1")], "sq1")
 
+    @patch("multica_template.fetch_squad_members", return_value=[])
     @patch("multica_template.fetch_workspace_members_list", return_value=[])
     @patch("multica_template._run_cmd")
-    def test_missing_leader_exits(self, mock_run, mock_ws_members):
+    def test_missing_leader_exits(self, mock_run, mock_ws_members, mock_fetch_members):
         registry = {}
         spec = {"squads": [{"name": "squad1", "leader": "missing"}]}
         with self.assertRaises(SystemExit):
             mt.apply_squads(spec, registry, dry_run=False, workspace_id="ws1")
 
+    @patch("multica_template.fetch_squad_members", return_value=[])
     @patch("multica_template.fetch_workspace_members_list", return_value=[])
     @patch("multica_template._run_cmd")
-    def test_update(self, mock_run, mock_ws_members):
+    def test_update(self, mock_run, mock_ws_members, mock_fetch_members):
         mock_run.return_value = {"id": "sq1"}
         registry = {("agent", "leader1"): "a1", ("squad", "squad1"): "sq1-old"}
         spec = {"squads": [{"name": "squad1", "leader": "leader1"}]}
@@ -532,9 +535,10 @@ class TestApplySquads(unittest.TestCase):
         self.assertIn("update", cmd)
         self.assertIn("sq1-old", cmd)
 
+    @patch("multica_template.fetch_squad_members", return_value=[])
     @patch("multica_template.fetch_workspace_members_list", return_value=[])
     @patch("multica_template._run_cmd")
-    def test_create_with_members(self, mock_run, mock_ws_members):
+    def test_create_with_members(self, mock_run, mock_ws_members, mock_fetch_members):
         mock_run.side_effect = [
             {"id": "sq1"},
             None,  # member add
@@ -549,9 +553,10 @@ class TestApplySquads(unittest.TestCase):
         self.assertIn("a2", member_cmd)
         self.assertIn("coder", member_cmd)
 
+    @patch("multica_template.fetch_squad_members", return_value=[])
     @patch("multica_template.fetch_workspace_members_list", return_value=[{"id": "m1", "name": "human1"}])
     @patch("multica_template._run_cmd")
-    def test_create_with_human_member(self, mock_run, mock_ws_members):
+    def test_create_with_human_member(self, mock_run, mock_ws_members, mock_fetch_members):
         mock_run.side_effect = [
             {"id": "sq1"},
             None,  # member add
@@ -563,6 +568,18 @@ class TestApplySquads(unittest.TestCase):
         member_cmd = mock_run.call_args_list[1][0][0]
         self.assertIn("m1", member_cmd)
         self.assertIn("reviewer", member_cmd)
+
+    @patch("multica_template.fetch_squad_members", return_value=[{"member_id": "a2", "member_type": "agent", "role": "coder"}])
+    @patch("multica_template.fetch_workspace_members_list", return_value=[])
+    @patch("multica_template._run_cmd")
+    def test_idempotent_skip_existing_member(self, mock_run, mock_ws_members, mock_fetch_members):
+        mock_run.return_value = {"id": "sq1"}
+        registry = {("agent", "leader1"): "a1", ("agent", "member1"): "a2", ("squad", "squad1"): "sq1"}
+        spec = {"squads": [{"name": "squad1", "leader": "leader1", "members": [{"name": "member1", "type": "agent", "role": "coder"}]}]}
+        mt.apply_squads(spec, registry, dry_run=False, workspace_id="ws1")
+        self.assertEqual(mock_run.call_count, 1)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("update", cmd)
 
 
 class TestApplyAutopilots(unittest.TestCase):
