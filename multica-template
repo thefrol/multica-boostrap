@@ -42,6 +42,13 @@ def _str_representer(dumper, data):
 yaml.add_representer(str, _str_representer)
 
 
+def _normalize_text(text):
+    """Strip trailing whitespace from each line to avoid YAML double-quoted \n escapes."""
+    if not isinstance(text, str):
+        return text
+    return "\n".join(line.rstrip() for line in text.splitlines())
+
+
 # ---------------------------------------------------------------------------
 # Template rendering (Jinja2)
 # ---------------------------------------------------------------------------
@@ -322,7 +329,8 @@ AGENT_KEYS = {
     "visibility", "maxConcurrentTasks", "customArgs", "customEnv", "skills",
 }
 SQUAD_KEYS = {"name", "description", "instructions", "leader", "members"}
-AUTOPILOT_KEYS = {"name", "title", "agent", "mode", "description", "priority", "status"}
+AUTOPILOT_KEYS = {"name", "title", "agent", "mode", "description", "priority", "status", "triggers"}
+TRIGGER_KEYS = {"cron", "timezone", "enabled", "label"}
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +416,8 @@ def load_template(directory, values_files=None, set_overrides=None):
             raise ValueError(f"spec.autopilots[{i}].name is required")
         if not autopilot.get("agent"):
             raise ValueError(f"spec.autopilots[{i}].agent is required")
+        for j, trigger in enumerate(autopilot.get("triggers") or []):
+            _validate_keys(trigger, TRIGGER_KEYS, f"spec.autopilots[{i}].triggers[{j}]")
 
     return data
 
@@ -876,6 +886,50 @@ def apply_autopilots(spec, registry, dry_run=False, workspace_id=None):
         if autopilot_id:
             registry[key] = autopilot_id
 
+        # Sync triggers
+        triggers = autopilot.get("triggers") or []
+        if autopilot_id and triggers and not dry_run:
+            existing_triggers = _run_json(
+                ["multica", "autopilot", "get", autopilot_id, "--output", "json"],
+                workspace_id=workspace_id,
+            )
+            existing = []
+            if existing_triggers and isinstance(existing_triggers, dict):
+                existing = existing_triggers.get("triggers", [])
+
+            # Map existing triggers by cron for matching
+            existing_by_cron = {t.get("cron_expression"): t for t in existing if t.get("cron_expression")}
+
+            for trig in triggers:
+                cron = trig.get("cron")
+                timezone = trig.get("timezone")
+                enabled = trig.get("enabled")
+                label = trig.get("label")
+
+                if not cron:
+                    continue
+
+                existing_trig = existing_by_cron.get(cron)
+                if existing_trig:
+                    trig_id = existing_trig["id"]
+                    print(f"[autopilot] {title} — updating trigger {cron}")
+                    tcmd = ["multica", "autopilot", "trigger-update", autopilot_id, trig_id, "--output", "json"]
+                    tcmd.extend(_flag("--cron", cron))
+                    tcmd.extend(_flag("--timezone", timezone))
+                    if enabled is not None:
+                        tcmd.extend(["--enabled", "true" if enabled else "false"])
+                    tcmd.extend(_flag("--label", label))
+                    _run_cmd(tcmd, dry_run=dry_run, workspace_id=workspace_id)
+                else:
+                    print(f"[autopilot] {title} — adding trigger {cron}")
+                    tcmd = ["multica", "autopilot", "trigger-add", autopilot_id, "--output", "json"]
+                    tcmd.extend(_flag("--cron", cron))
+                    tcmd.extend(_flag("--timezone", timezone))
+                    if enabled is not None:
+                        tcmd.extend(["--enabled", "true" if enabled else "false"])
+                    tcmd.extend(_flag("--label", label))
+                    _run_cmd(tcmd, dry_run=dry_run, workspace_id=workspace_id)
+
 
 # ---------------------------------------------------------------------------
 # GitHub fetching
@@ -1035,7 +1089,7 @@ def fetch_workspace_members_list(workspace_id=None):
 
 
 def fetch_autopilots(workspace_id=None):
-    """Fetch autopilots with full details."""
+    """Fetch autopilots with full details and triggers."""
     resp = _run_json(["multica", "autopilot", "list", "--output", "json"], workspace_id=workspace_id)
     autopilots = []
     if isinstance(resp, dict):
@@ -1047,7 +1101,9 @@ def fetch_autopilots(workspace_id=None):
     for ap in autopilots:
         detail = _run_json(["multica", "autopilot", "get", ap["id"], "--output", "json"], workspace_id=workspace_id)
         if detail and isinstance(detail, dict) and "autopilot" in detail:
-            full_autopilots.append(detail["autopilot"])
+            ap_data = dict(detail["autopilot"])
+            ap_data["triggers"] = detail.get("triggers", [])
+            full_autopilots.append(ap_data)
         else:
             full_autopilots.append(ap)
     return full_autopilots
@@ -1107,15 +1163,15 @@ def build_template(workspace_id=None):
                 "name": skill["name"],
             }
             if skill.get("description"):
-                s["description"] = skill["description"]
+                s["description"] = _normalize_text(skill["description"])
             if skill.get("content"):
-                s["content"] = skill["content"]
+                s["content"] = _normalize_text(skill["content"])
             if skill.get("files"):
                 files = []
                 for f in skill["files"]:
                     files.append({
                         "path": f["path"],
-                        "content": f["content"],
+                        "content": _normalize_text(f["content"]),
                     })
                 s["files"] = files
             skill_list.append(s)
@@ -1129,13 +1185,13 @@ def build_template(workspace_id=None):
                 "name": agent["name"],
             }
             if agent.get("description"):
-                a["description"] = agent["description"]
+                a["description"] = _normalize_text(agent["description"])
             if agent.get("runtime_id"):
                 a["runtimeId"] = agent["runtime_id"]
             if agent.get("model"):
                 a["model"] = agent["model"]
             if agent.get("instructions"):
-                a["instructions"] = agent["instructions"]
+                a["instructions"] = _normalize_text(agent["instructions"])
             if agent.get("visibility"):
                 a["visibility"] = agent["visibility"]
             if agent.get("max_concurrent_tasks") is not None:
@@ -1166,9 +1222,9 @@ def build_template(workspace_id=None):
                 "name": squad["name"],
             }
             if squad.get("description"):
-                sq["description"] = squad["description"]
+                sq["description"] = _normalize_text(squad["description"])
             if squad.get("instructions"):
-                sq["instructions"] = squad["instructions"]
+                sq["instructions"] = _normalize_text(squad["instructions"])
             leader_id = squad.get("leader_id")
             if leader_id and leader_id in agent_id_to_name:
                 sq["leader"] = agent_id_to_name[leader_id]
@@ -1219,11 +1275,27 @@ def build_template(workspace_id=None):
             if ap.get("execution_mode"):
                 ap_out["mode"] = ap["execution_mode"]
             if ap.get("description"):
-                ap_out["description"] = ap["description"]
+                ap_out["description"] = _normalize_text(ap["description"])
             if ap.get("priority"):
                 ap_out["priority"] = ap["priority"]
             if ap.get("status"):
                 ap_out["status"] = ap["status"]
+            triggers = ap.get("triggers", [])
+            if triggers:
+                trigger_list = []
+                for trig in triggers:
+                    t = {}
+                    if trig.get("cron_expression"):
+                        t["cron"] = trig["cron_expression"]
+                    if trig.get("timezone"):
+                        t["timezone"] = trig["timezone"]
+                    if trig.get("enabled") is not None:
+                        t["enabled"] = trig["enabled"]
+                    if trig.get("label"):
+                        t["label"] = trig["label"]
+                    trigger_list.append(t)
+                if trigger_list:
+                    ap_out["triggers"] = trigger_list
             autopilot_list.append(ap_out)
         template["spec"]["autopilots"] = autopilot_list
 
@@ -1237,7 +1309,7 @@ def write_template(template, output_dir):
 
     path = os.path.join(output_dir, "template.yaml")
     with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(template, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        yaml.dump(template, f, default_flow_style=False, sort_keys=False, allow_unicode=True, Dumper=yaml.Dumper)
 
     return path
 

@@ -99,3 +99,8 @@ spec:
       description: string   # Optional. Used as the task prompt.
       priority: string      # Optional. "none", "low", "medium", "high", "urgent".
       status: string        # Optional. "active" or "paused".
+      triggers:             # Optional. Schedule triggers for the autopilot.
+        - cron: string      # Required. Cron expression (e.g. "0 9 * * *").
+          timezone: string  # Optional. IANA timezone (default: UTC).
+          enabled: boolean  # Optional. Default: true.
+          label: string     # Optional. Human-readable label.
