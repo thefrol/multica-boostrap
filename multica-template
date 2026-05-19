@@ -925,10 +925,26 @@ def apply_autopilots(spec, registry, dry_run=False, workspace_id=None):
                     tcmd = ["multica", "autopilot", "trigger-add", autopilot_id, "--output", "json"]
                     tcmd.extend(_flag("--cron", cron))
                     tcmd.extend(_flag("--timezone", timezone))
-                    if enabled is not None:
-                        tcmd.extend(["--enabled", "true" if enabled else "false"])
                     tcmd.extend(_flag("--label", label))
                     _run_cmd(tcmd, dry_run=dry_run, workspace_id=workspace_id)
+                    # trigger-add does not support --enabled; disable via trigger-update if needed
+                    if enabled is False:
+                        # Re-fetch to get the newly created trigger id
+                        refreshed = _run_json(
+                            ["multica", "autopilot", "get", autopilot_id, "--output", "json"],
+                            workspace_id=workspace_id,
+                        )
+                        refreshed_trig = None
+                        if refreshed and isinstance(refreshed, dict):
+                            for t in refreshed.get("triggers", []):
+                                if t.get("cron_expression") == cron:
+                                    refreshed_trig = t
+                                    break
+                        if refreshed_trig:
+                            print(f"[autopilot] {title} — disabling trigger {cron}")
+                            dcmd = ["multica", "autopilot", "trigger-update", autopilot_id, refreshed_trig["id"], "--output", "json"]
+                            dcmd.extend(["--enabled", "false"])
+                            _run_cmd(dcmd, dry_run=dry_run, workspace_id=workspace_id)
 
 
 # ---------------------------------------------------------------------------
