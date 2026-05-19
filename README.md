@@ -364,6 +364,79 @@ instructions: |
 v0.3 supports **simple variable substitution only**. Loops, conditionals, and
 includes are reserved for future releases.
 
+## .env Templating (Secrets)
+
+Keep credentials out of `template.yaml` by storing them in a separate `.env` file.
+This keeps your templates safe to commit to git while still provisioning agents
+with their required secrets.
+
+### Per-agent `envFile`
+
+Reference a `.env` file directly on an agent definition. The file is loaded
+relative to the template directory and merged into `customEnv`. Values in
+`customEnv` take precedence over the `.env` file.
+
+```yaml
+agents:
+  - name: backend-lead
+    envFile: .env
+    customEnv:
+      PUBLIC_VAR: "not a secret"
+```
+
+```bash
+# .env
+OPENAI_API_KEY=sk-...
+DB_PASSWORD=secret
+```
+
+### Template variables from `.env`
+
+You can also reference `.env` values via Jinja2 using `{{ .Env.VARNAME }}`:
+
+```yaml
+agents:
+  - name: backend-lead
+    customEnv:
+      API_KEY: "{{ .Env.OPENAI_API_KEY }}"
+```
+
+By default, the engine looks for `.env` in the template directory. Use
+`--env-file` to specify a different path:
+
+```bash
+multica-template apply ./my-template --env-file ./secrets.env
+```
+
+### Dump with `.env` extraction
+
+When exporting a workspace, use `--env-file` to extract agent `customEnv` values
+into a `.env` file and replace them in `template.yaml` with `{{ .Env.VARNAME }}`
+placeholders:
+
+```bash
+multica-template dump ./exported-template --env-file .env
+```
+
+This produces:
+
+```bash
+# exported-template/.env
+AGENT_NAME_API_KEY=secret-value
+```
+
+```yaml
+# exported-template/template.yaml
+agents:
+  - name: agent-name
+    customEnv:
+      API_KEY: "{{ .Env.AGENT_NAME_API_KEY }}"
+```
+
+### Security note
+
+`.env` files are listed in `.gitignore` by default. Never commit them.
+
 ## Roadmap
 
 | Phase | Scope |

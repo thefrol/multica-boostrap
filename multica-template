@@ -49,6 +49,40 @@ def _normalize_text(text):
     return "\n".join(line.rstrip() for line in text.splitlines())
 
 
+def parse_dotenv(path):
+    """Parse a .env file and return a dict of key-value pairs.
+
+    Supports:
+      KEY=value
+      KEY="value"
+      KEY='value'
+      export KEY=value
+      # comments
+      empty lines
+    """
+    result = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n\r")
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("export "):
+                stripped = stripped[7:]
+            if "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            # Unquote
+            if len(value) >= 2:
+                if (value.startswith('"') and value.endswith('"')) or \
+                   (value.startswith("'") and value.endswith("'")):
+                    value = value[1:-1]
+            result[key] = value
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Template rendering (Jinja2)
 # ---------------------------------------------------------------------------
@@ -135,7 +169,7 @@ def load_values(directory, values_files=None, set_overrides=None):
     return merged
 
 
-def render_template(directory, values_files=None, set_overrides=None):
+def render_template(directory, values_files=None, set_overrides=None, env_file=None):
     """Read template.yaml, load values, render with Jinja2, return rendered text."""
     path = os.path.join(directory, "template.yaml")
     if not os.path.isfile(path):
@@ -146,8 +180,20 @@ def render_template(directory, values_files=None, set_overrides=None):
 
     values = load_values(directory, values_files=values_files, set_overrides=set_overrides)
 
-    # Fast path: no values and no Jinja2 syntax
-    if not values and "{{" not in raw and "{%" not in raw:
+    # Load .env file if present or explicitly specified
+    env_vars = {}
+    dotenv_path = env_file
+    if not dotenv_path:
+        default_dotenv = os.path.join(directory, ".env")
+        if os.path.isfile(default_dotenv):
+            dotenv_path = default_dotenv
+    if dotenv_path:
+        if not os.path.isfile(dotenv_path):
+            raise ValueError(f"env file not found: {dotenv_path}")
+        env_vars = parse_dotenv(dotenv_path)
+
+    # Fast path: no values, no env vars, and no Jinja2 syntax
+    if not values and not env_vars and "{{" not in raw and "{%" not in raw:
         return raw
 
     try:
@@ -161,6 +207,8 @@ def render_template(directory, values_files=None, set_overrides=None):
     # Helm-style {{ .Values.key }} -> {{ Values.key }} for Jinja2 compatibility
     raw = raw.replace("{{ .Values.", "{{ Values.")
     raw = raw.replace("{{- .Values.", "{{- Values.")
+    raw = raw.replace("{{ .Env.", "{{ Env.")
+    raw = raw.replace("{{- .Env.", "{{- Env.")
 
     env = jinja2.Environment(
         undefined=jinja2.StrictUndefined,
@@ -169,7 +217,7 @@ def render_template(directory, values_files=None, set_overrides=None):
     )
     template_obj = env.from_string(raw)
     try:
-        rendered = template_obj.render(Values=values)
+        rendered = template_obj.render(Values=values, Env=env_vars)
     except jinja2.UndefinedError as e:
         raise ValueError(f"Template rendering error: {e}")
 
@@ -326,7 +374,7 @@ SKILL_KEYS = {"name", "description", "content", "files"}
 SKILL_FILE_KEYS = {"path", "content"}
 AGENT_KEYS = {
     "name", "description", "runtimeId", "model", "instructions",
-    "visibility", "maxConcurrentTasks", "customArgs", "customEnv", "skills",
+    "visibility", "maxConcurrentTasks", "customArgs", "customEnv", "skills", "envFile",
 }
 SQUAD_KEYS = {"name", "description", "instructions", "leader", "members"}
 AUTOPILOT_KEYS = {"name", "title", "agent", "mode", "description", "priority", "status", "triggers"}
@@ -345,12 +393,12 @@ def _validate_keys(obj, allowed, path):
         raise ValueError(f"{path} contains unknown keys: {', '.join(sorted(unknown))}")
 
 
-def load_template(directory, values_files=None, set_overrides=None):
+def load_template(directory, values_files=None, set_overrides=None, env_file=None):
     path = os.path.join(directory, "template.yaml")
     if not os.path.isfile(path):
         raise ValueError(f"template.yaml not found in {directory}")
 
-    raw = render_template(directory, values_files=values_files, set_overrides=set_overrides)
+    raw = render_template(directory, values_files=values_files, set_overrides=set_overrides, env_file=env_file)
     data = yaml.safe_load(raw)
 
     if not isinstance(data, dict):
@@ -685,7 +733,7 @@ def _resolve_runtime_id(agent, available_runtimes):
     sys.exit(1)
 
 
-def apply_agents(spec, registry, dry_run=False, workspace_id=None):
+def apply_agents(spec, registry, dry_run=False, workspace_id=None, source_dir=None):
     available_runtimes = get_available_runtimes(workspace_id=workspace_id)
 
     for agent in spec.get("agents") or []:
@@ -696,6 +744,21 @@ def apply_agents(spec, registry, dry_run=False, workspace_id=None):
         model = agent.get("model")
         model_hint = f" model={model}" if model else ""
         print(f"[agent] {name} — {action}{model_hint}")
+
+        # Merge customEnv with envFile if specified
+        custom_env = dict(agent.get("customEnv") or {})
+        env_file = agent.get("envFile")
+        if env_file and source_dir:
+            env_path = os.path.join(source_dir, env_file)
+            if os.path.isfile(env_path):
+                file_env = parse_dotenv(env_path)
+                # customEnv takes precedence over envFile
+                merged = dict(file_env)
+                merged.update(custom_env)
+                custom_env = merged
+            else:
+                print(f"[agent] {name} — WARNING: envFile not found: {env_path}", file=sys.stderr)
+
         cmd = ["multica", "agent", "update" if exists else "create", "--output", "json"]
         if exists:
             cmd.append(registry[key])
@@ -708,7 +771,7 @@ def apply_agents(spec, registry, dry_run=False, workspace_id=None):
         cmd.extend(_flag("--visibility", agent.get("visibility")))
         cmd.extend(_flag("--max-concurrent-tasks", agent.get("maxConcurrentTasks")))
         cmd.extend(_flag("--custom-args", agent.get("customArgs")))
-        cmd.extend(_flag("--custom-env", agent.get("customEnv")))
+        cmd.extend(_flag("--custom-env", custom_env if custom_env else None))
         result = _run_cmd(cmd, dry_run=dry_run, workspace_id=workspace_id)
 
         agent_id = registry.get(key)
@@ -1335,7 +1398,12 @@ def cmd_apply(args):
         print("--ref can only be used with a GitHub source.", file=sys.stderr)
         sys.exit(1)
 
-    template = load_template(source, values_files=getattr(args, "values", None), set_overrides=getattr(args, "set", None))
+    template = load_template(
+        source,
+        values_files=getattr(args, "values", None),
+        set_overrides=getattr(args, "set", None),
+        env_file=getattr(args, "env_file", None),
+    )
 
     target_ws = resolve_workspace(args, template, dry_run=args.dry_run)
     if target_ws:
@@ -1353,7 +1421,7 @@ def cmd_apply(args):
     apply_workspace(spec, dry_run=args.dry_run, workspace_id=target_ws)
     apply_labels(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
     apply_skills(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
-    apply_agents(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
+    apply_agents(spec, registry, dry_run=args.dry_run, workspace_id=target_ws, source_dir=source)
     apply_squads(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
     apply_autopilots(spec, registry, dry_run=args.dry_run, workspace_id=target_ws)
 
@@ -1373,6 +1441,32 @@ def cmd_dump(args):
 
     print("Fetching workspace state...")
     template = build_template(workspace_id=target_ws)
+
+    env_file_path = getattr(args, "env_file", None)
+    if env_file_path:
+        env_vars = {}
+        agents = template.get("spec", {}).get("agents") or []
+        for agent in agents:
+            custom_env = agent.get("customEnv")
+            if not custom_env:
+                continue
+            agent_name = agent["name"]
+            new_custom_env = {}
+            for key, value in custom_env.items():
+                env_key = f"{agent_name}_{key}".upper()
+                env_key = re.sub(r"[^A-Z0-9_]", "_", env_key)
+                env_vars[env_key] = str(value)
+                new_custom_env[key] = f"{{{{ .Env.{env_key} }}}}"
+            agent["customEnv"] = new_custom_env
+
+        dotenv_full_path = os.path.join(args.output_dir, env_file_path)
+        dotenv_dir = os.path.dirname(dotenv_full_path)
+        if dotenv_dir and not os.path.isdir(dotenv_dir):
+            os.makedirs(dotenv_dir, exist_ok=True)
+        with open(dotenv_full_path, "w", encoding="utf-8") as f:
+            for key, value in sorted(env_vars.items()):
+                f.write(f"{key}={value}\n")
+        print(f"Writing env file to {dotenv_full_path} ...")
 
     print(f"Writing template to {args.output_dir}/template.yaml ...")
     path = write_template(template, args.output_dir)
@@ -1522,6 +1616,11 @@ def main():
         action="append",
         help="Set a value override (e.g. --set agent.model=gpt-4o). Can be given multiple times.",
     )
+    apply_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        help="Path to a .env file to load for {{ .Env.VARNAME }} template variables",
+    )
     apply_parser.set_defaults(func=cmd_apply)
 
     # ------------------------------------------------------------------
@@ -1535,6 +1634,11 @@ def main():
     dump_parser.add_argument("output_dir", help="Path to directory where template.yaml will be written")
     dump_parser.add_argument("--workspace-id", help="Dump from an explicit workspace UUID")
     dump_parser.add_argument("--workspace-name", help="Resolve workspace name to ID and dump from there")
+    dump_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        help="Extract agent customEnv values to a .env file and use {{ .Env.VARNAME }} placeholders in template.yaml",
+    )
     dump_parser.set_defaults(func=cmd_dump)
 
     # ------------------------------------------------------------------

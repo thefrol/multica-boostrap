@@ -1073,5 +1073,188 @@ class TestLoadTemplateWithRendering(unittest.TestCase):
         self.assertEqual(result["metadata"]["name"], "rendered")
 
 
+class TestParseDotenv(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.env_path = os.path.join(self.tmpdir, ".env")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write(self, text):
+        with open(self.env_path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_basic_key_value(self):
+        self._write("FOO=bar\n")
+        result = mt.parse_dotenv(self.env_path)
+        self.assertEqual(result, {"FOO": "bar"})
+
+    def test_quoted_values(self):
+        self._write('FOO="bar"\nBAZ=\'qux\'\n')
+        result = mt.parse_dotenv(self.env_path)
+        self.assertEqual(result, {"FOO": "bar", "BAZ": "qux"})
+
+    def test_export_prefix(self):
+        self._write("export FOO=bar\n")
+        result = mt.parse_dotenv(self.env_path)
+        self.assertEqual(result, {"FOO": "bar"})
+
+    def test_comments_and_empty_lines(self):
+        self._write("# comment\n\nFOO=bar\n# another\nBAZ=qux\n")
+        result = mt.parse_dotenv(self.env_path)
+        self.assertEqual(result, {"FOO": "bar", "BAZ": "qux"})
+
+    def test_value_with_equals(self):
+        self._write("FOO=bar=baz\n")
+        result = mt.parse_dotenv(self.env_path)
+        self.assertEqual(result, {"FOO": "bar=baz"})
+
+    def test_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            mt.parse_dotenv(os.path.join(self.tmpdir, "missing.env"))
+
+
+class TestRenderTemplateWithEnv(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.template_path = os.path.join(self.tmpdir, "template.yaml")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write(self, text):
+        with open(self.template_path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_env_substitution(self):
+        env_path = os.path.join(self.tmpdir, ".env")
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("API_KEY=secret123\n")
+        self._write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: {{ .Env.API_KEY }}\nspec: {}\n")
+        result = mt.render_template(self.tmpdir)
+        data = yaml.safe_load(result)
+        self.assertEqual(data["metadata"]["name"], "secret123")
+
+    def test_explicit_env_file(self):
+        env_path = os.path.join(self.tmpdir, "secrets.env")
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("DB_PASS=pwd\n")
+        self._write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: test\nspec:\n  agents:\n    - name: ag1\n      customEnv:\n        DB_PASS: \"{{ .Env.DB_PASS }}\"\n")
+        result = mt.render_template(self.tmpdir, env_file=env_path)
+        data = yaml.safe_load(result)
+        self.assertEqual(data["spec"]["agents"][0]["customEnv"]["DB_PASS"], "pwd")
+
+    def test_missing_env_file_raises(self):
+        self._write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: test\nspec: {}\n")
+        with self.assertRaises(ValueError) as ctx:
+            mt.render_template(self.tmpdir, env_file="/nonexistent.env")
+        self.assertIn("not found", str(ctx.exception))
+
+
+class TestLoadTemplateWithEnvFile(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_agent_with_env_file_passes(self):
+        tpl_path = os.path.join(self.tmpdir, "template.yaml")
+        with open(tpl_path, "w", encoding="utf-8") as f:
+            yaml.dump(_make_template(spec={"agents": [{"name": "ag1", "envFile": ".env"}]}), f)
+        result = mt.load_template(self.tmpdir)
+        self.assertEqual(result["spec"]["agents"][0]["envFile"], ".env")
+
+
+class TestApplyAgentsWithEnvFile(unittest.TestCase):
+    @patch("multica_template.get_available_runtimes", return_value=[{"id": "r1", "name": "default"}])
+    @patch("multica_template._run_cmd")
+    def test_env_file_merged_into_custom_env(self, mock_run, mock_runtimes):
+        mock_run.return_value = {"id": "a1"}
+        registry = {}
+        env_path = os.path.join(tempfile.mkdtemp(), ".env")
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("FROM_FILE=value\nOVERRIDE=original\n")
+        spec = {
+            "agents": [
+                {
+                    "name": "ag1",
+                    "runtimeId": "r1",
+                    "envFile": ".env",
+                    "customEnv": {"INLINE": "yes", "OVERRIDE": "replaced"},
+                }
+            ]
+        }
+        mt.apply_agents(spec, registry, dry_run=False, workspace_id="ws1", source_dir=os.path.dirname(env_path))
+        cmd = mock_run.call_args[0][0]
+        # Find --custom-env arg
+        idx = cmd.index("--custom-env")
+        custom_env = json.loads(cmd[idx + 1])
+        self.assertEqual(custom_env["FROM_FILE"], "value")
+        self.assertEqual(custom_env["INLINE"], "yes")
+        self.assertEqual(custom_env["OVERRIDE"], "replaced")
+        import shutil
+        shutil.rmtree(os.path.dirname(env_path), ignore_errors=True)
+
+    @patch("multica_template.get_available_runtimes", return_value=[{"id": "r1", "name": "default"}])
+    @patch("multica_template._run_cmd")
+    def test_missing_env_file_warns(self, mock_run, mock_runtimes):
+        mock_run.return_value = {"id": "a1"}
+        registry = {}
+        spec = {"agents": [{"name": "ag1", "runtimeId": "r1", "envFile": "missing.env"}]}
+        with patch("sys.stderr", new=StringIO()) as stderr:
+            mt.apply_agents(spec, registry, dry_run=False, workspace_id="ws1", source_dir=tempfile.mkdtemp())
+        self.assertIn("WARNING: envFile not found", stderr.getvalue())
+
+
+class TestDumpWithEnvFile(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("multica_template.resolve_workspace_simple", return_value="ws1")
+    @patch("multica_template.build_template")
+    def test_extracts_custom_env(self, mock_build, mock_resolve):
+        mock_build.return_value = _make_template(spec={
+            "agents": [
+                {"name": "ag1", "customEnv": {"API_KEY": "secret1"}}
+            ]
+        })
+        args = FakeArgs(output_dir=self.tmpdir, workspace_id="ws1", workspace_name=None, env_file=".env")
+        mt.cmd_dump(args)
+        env_path = os.path.join(self.tmpdir, ".env")
+        self.assertTrue(os.path.isfile(env_path))
+        with open(env_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("AG1_API_KEY=secret1", content)
+        template_path = os.path.join(self.tmpdir, "template.yaml")
+        with open(template_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        self.assertEqual(data["spec"]["agents"][0]["customEnv"]["API_KEY"], "{{ .Env.AG1_API_KEY }}")
+
+    @patch("multica_template.resolve_workspace_simple", return_value="ws1")
+    @patch("multica_template.build_template")
+    def test_no_env_file_keeps_literal_values(self, mock_build, mock_resolve):
+        mock_build.return_value = _make_template(spec={
+            "agents": [
+                {"name": "ag1", "customEnv": {"API_KEY": "secret1"}}
+            ]
+        })
+        args = FakeArgs(output_dir=self.tmpdir, workspace_id="ws1", workspace_name=None, env_file=None)
+        mt.cmd_dump(args)
+        template_path = os.path.join(self.tmpdir, "template.yaml")
+        with open(template_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        self.assertEqual(data["spec"]["agents"][0]["customEnv"]["API_KEY"], "secret1")
+        env_path = os.path.join(self.tmpdir, ".env")
+        self.assertFalse(os.path.isfile(env_path))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
