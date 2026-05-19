@@ -176,6 +176,8 @@ rm -rf node_modules/.cache
 ls .kimi/skills/
 # or
 ls .agents/skills/
+# or
+ls skills/
 
 # Verify the skill directory name matches the skill reference exactly.
 ```
@@ -188,8 +190,7 @@ ls .agents/skills/
 - Review the existing file before overwriting.
 - If the file is mission-critical, back it up or ask the owner before
   replacing.
-- Use `StrReplaceFile` for targeted edits instead of full-file overwrites
-  when possible.
+- Use targeted edits instead of full-file overwrites when possible.
 
 ## 5. Escalation Rules
 
@@ -216,5 +217,5 @@ After applying any fix, verify:
 
 ## See Also
 
-- [Git Merge Policy](../git-merge-policy/SKILL.md)
-- [Code Review Skill](../code-review/SKILL.md)
+- Git Merge Policy skill
+- Code Review skill
