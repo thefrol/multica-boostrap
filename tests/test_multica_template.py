@@ -10,6 +10,7 @@ Run with:
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1395,6 +1396,80 @@ class TestDumpWithEnvFile(unittest.TestCase):
         self.assertEqual(data["spec"]["agents"][0]["customEnv"]["API_KEY"], "secret1")
         env_path = os.path.join(self.tmpdir, ".env")
         self.assertFalse(os.path.isfile(env_path))
+
+class TestParseVersion(unittest.TestCase):
+    def test_simple(self):
+        self.assertEqual(mt._parse_version("1.2.3"), (1, 2, 3))
+
+    def test_with_v_prefix(self):
+        self.assertEqual(mt._parse_version("v0.3.0"), (0, 3, 0))
+
+    def test_two_components(self):
+        self.assertEqual(mt._parse_version("0.3"), (0, 3, 0))
+
+    def test_one_component(self):
+        self.assertEqual(mt._parse_version("2"), (2, 0, 0))
+
+    def test_prerelease_suffix(self):
+        self.assertEqual(mt._parse_version("1.2.3-alpha"), (1, 2, 3))
+
+    def test_non_numeric_suffix_in_middle(self):
+        self.assertEqual(mt._parse_version("1.2a.3"), (1, 2, 3))
+
+
+class TestVersionMeetsRequirement(unittest.TestCase):
+    def test_equal(self):
+        self.assertTrue(mt._version_meets_requirement("0.3.0", "0.3.0"))
+
+    def test_greater_patch(self):
+        self.assertTrue(mt._version_meets_requirement("0.3.1", "0.3.0"))
+
+    def test_greater_minor(self):
+        self.assertTrue(mt._version_meets_requirement("0.4.0", "0.3.0"))
+
+    def test_greater_major(self):
+        self.assertTrue(mt._version_meets_requirement("1.0.0", "0.3.0"))
+
+    def test_less_patch(self):
+        self.assertFalse(mt._version_meets_requirement("0.3.0", "0.3.1"))
+
+    def test_less_minor(self):
+        self.assertFalse(mt._version_meets_requirement("0.2.9", "0.3.0"))
+
+    def test_less_major(self):
+        self.assertFalse(mt._version_meets_requirement("0.2.9", "1.0.0"))
+
+    def test_with_v_prefix(self):
+        self.assertTrue(mt._version_meets_requirement("v0.3.3", "0.3.0"))
+
+
+class TestCheckMulticaVersion(unittest.TestCase):
+    @patch("multica_template.subprocess.run")
+    def test_current_meets_requirement(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({"version": "0.3.3"})
+        mock_run.return_value.returncode = 0
+        # Should not raise or exit
+        mt._check_multica_version("0.3.0")
+
+    @patch("multica_template.subprocess.run")
+    def test_current_below_requirement(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({"version": "0.2.5"})
+        mock_run.return_value.returncode = 0
+        with patch.object(sys, "exit") as mock_exit:
+            with patch("sys.stderr", new_callable=StringIO) as stderr:
+                mt._check_multica_version("0.3.0")
+        mock_exit.assert_called_once_with(1)
+        self.assertIn("0.2.5", stderr.getvalue())
+        self.assertIn("0.3.0", stderr.getvalue())
+        self.assertIn("multica update", stderr.getvalue())
+
+    @patch("multica_template.subprocess.run")
+    def test_unable_to_determine_version(self, mock_run):
+        mock_run.side_effect = subprocess.CalledProcessError(1, "multica")
+        with patch("sys.stderr", new_callable=StringIO) as stderr:
+            mt._check_multica_version("0.3.0")
+        self.assertIn("WARNING", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
