@@ -221,6 +221,49 @@ class TestLoadTemplate(unittest.TestCase):
         result = mt.load_template(self.tmpdir)
         self.assertEqual(result["spec"]["agents"][0]["name"], "ag1")
 
+    def test_agent_custom_args_not_list(self):
+        tpl = _make_template()
+        tpl["spec"]["agents"] = [{"name": "ag1", "runtimeId": "r1", "customArgs": "--foo"}]
+        self._write(tpl)
+        with self.assertRaises(ValueError) as ctx:
+            mt.load_template(self.tmpdir)
+        self.assertIn("must be a list", str(ctx.exception))
+
+    def test_agent_custom_args_item_not_string(self):
+        tpl = _make_template()
+        tpl["spec"]["agents"] = [{"name": "ag1", "runtimeId": "r1", "customArgs": ["--foo", 42]}]
+        self._write(tpl)
+        with self.assertRaises(ValueError) as ctx:
+            mt.load_template(self.tmpdir)
+        self.assertIn("must be a string", str(ctx.exception))
+
+    def test_agent_custom_args_test_flag_warning(self):
+        tpl = _make_template()
+        tpl["spec"]["agents"] = [{"name": "ag1", "runtimeId": "r1", "customArgs": ["-test.timeout", "30s"]}]
+        self._write(tpl)
+        with patch("sys.stderr", new_callable=StringIO) as mock_stderr:
+            mt.load_template(self.tmpdir)
+            stderr_output = mock_stderr.getvalue()
+        self.assertIn("WARNING", stderr_output)
+        self.assertIn("-test.timeout", stderr_output)
+        self.assertIn("Go test flag", stderr_output)
+
+    def test_agent_custom_env_not_dict(self):
+        tpl = _make_template()
+        tpl["spec"]["agents"] = [{"name": "ag1", "runtimeId": "r1", "customEnv": "not-a-dict"}]
+        self._write(tpl)
+        with self.assertRaises(ValueError) as ctx:
+            mt.load_template(self.tmpdir)
+        self.assertIn("must be a mapping", str(ctx.exception))
+
+    def test_agent_custom_env_value_not_string(self):
+        tpl = _make_template()
+        tpl["spec"]["agents"] = [{"name": "ag1", "runtimeId": "r1", "customEnv": {"K": "V", "RETRIES": 3}}]
+        self._write(tpl)
+        with self.assertRaises(ValueError) as ctx:
+            mt.load_template(self.tmpdir)
+        self.assertIn("must be a string", str(ctx.exception))
+
 
 class TestFlag(unittest.TestCase):
     def test_none_returns_empty(self):

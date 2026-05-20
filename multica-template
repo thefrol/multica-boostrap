@@ -562,6 +562,36 @@ def load_template(directory, values_files=None, set_overrides=None, env_file=Non
         if not agent.get("name"):
             raise ValueError(f"spec.agents[{i}].name is required")
 
+        custom_args = agent.get("customArgs")
+        if custom_args is not None:
+            if not isinstance(custom_args, list):
+                raise ValueError(
+                    f"spec.agents[{i}].customArgs must be a list, got {type(custom_args).__name__}"
+                )
+            for j, arg in enumerate(custom_args):
+                if not isinstance(arg, str):
+                    raise ValueError(
+                        f"spec.agents[{i}].customArgs[{j}] must be a string, got {type(arg).__name__}"
+                    )
+                if isinstance(arg, str) and arg.startswith("-test"):
+                    print(
+                        f"WARNING: spec.agents[{i}] ({agent['name']}) has suspicious customArg {arg!r} — "
+                        "this looks like a Go test flag and will likely prevent the agent from starting",
+                        file=sys.stderr,
+                    )
+
+        custom_env = agent.get("customEnv")
+        if custom_env is not None:
+            if not isinstance(custom_env, dict):
+                raise ValueError(
+                    f"spec.agents[{i}].customEnv must be a mapping, got {type(custom_env).__name__}"
+                )
+            for key, value in custom_env.items():
+                if not isinstance(value, str):
+                    raise ValueError(
+                        f"spec.agents[{i}].customEnv[{key!r}] must be a string, got {type(value).__name__}"
+                    )
+
     for i, squad in enumerate(spec.get("squads") or []):
         _validate_keys(squad, SQUAD_KEYS, f"spec.squads[{i}]")
         if not squad.get("name"):
