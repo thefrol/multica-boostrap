@@ -36,7 +36,7 @@ bash install.sh
 ### Usage
 
 ```bash
-# Apply a template to the current workspace
+# Apply a template (interactive workspace selection when none is specified)
 multica-template apply ./examples/basic-workspace
 
 # Dry-run to see what would change
@@ -45,6 +45,9 @@ multica-template apply ./examples/agent-fleet --dry-run
 # Apply to a specific workspace by ID or name
 multica-template apply ./examples/basic-workspace --workspace-id <uuid>
 multica-template apply ./examples/basic-workspace --workspace-name "Team Alpha"
+
+# Skip the interactive prompt and use the current default workspace (CI/scripts)
+multica-template apply ./examples/basic-workspace --yes
 
 # Create a new workspace from a template
 multica-template apply ./examples/create-workspace
@@ -221,7 +224,18 @@ profile.
 ### Precedence
 
 ```
---workspace-id > --workspace-name > spec.targetWorkspace.id > spec.targetWorkspace.name > current workspace
+--workspace-id > --workspace-name > spec.targetWorkspace.id > spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var > interactive prompt > current workspace (with --yes)
+```
+
+If no workspace is explicitly specified and you run in an interactive terminal,
+`multica-template` lists your available workspaces and asks you to pick one.
+This prevents accidental applies to the wrong workspace.
+
+Use `--yes` (or `-y`) to skip the prompt and accept the current default workspace
+( useful for CI pipelines and scripts ):
+
+```bash
+multica-template apply ./examples/basic-workspace --yes
 ```
 
 If `--workspace-name` or `spec.targetWorkspace.name` is used but the workspace
@@ -265,7 +279,7 @@ The engine resolves the target workspace in the following precedence:
 
 ```
 --workspace-id > --workspace-name > spec.targetWorkspace.id >
-spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var > test-space (default)
+spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var > interactive prompt > current workspace (with --yes)
 ```
 
 If no target is specified via CLI flags, template fields, or environment variables,

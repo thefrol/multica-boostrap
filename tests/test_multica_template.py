@@ -374,14 +374,34 @@ class TestResolveWorkspace(unittest.TestCase):
         result = mt.resolve_workspace(args, _make_template())
         self.assertEqual(result, "env-id")
 
-    def test_fallback_to_current_workspace(self):
-        args = FakeArgs()
+    def test_fallback_to_current_workspace_with_yes(self):
+        args = FakeArgs(yes=True)
         # Ensure env var is not set
         env = os.environ.copy()
         env.pop("MULTICA_WORKSPACE_ID", None)
         with patch.dict(os.environ, env, clear=True):
             result = mt.resolve_workspace(args, _make_template())
         self.assertIsNone(result)
+
+    @patch("multica_template._is_interactive", return_value=False)
+    def test_fallback_without_workspace_exits_in_non_interactive(self, mock_interactive):
+        args = FakeArgs()
+        env = os.environ.copy()
+        env.pop("MULTICA_WORKSPACE_ID", None)
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(SystemExit):
+                mt.resolve_workspace(args, _make_template())
+
+    @patch("multica_template._is_interactive", return_value=True)
+    @patch("multica_template._parse_workspace_list_table", return_value={"ws1": "uid1", "ws2": "uid2"})
+    @patch("builtins.input", return_value="2")
+    def test_interactive_prompt_selects_workspace(self, mock_input, mock_list, mock_interactive):
+        args = FakeArgs()
+        env = os.environ.copy()
+        env.pop("MULTICA_WORKSPACE_ID", None)
+        with patch.dict(os.environ, env, clear=True):
+            result = mt.resolve_workspace(args, _make_template())
+        self.assertEqual(result, "uid2")
 
     @patch("multica_template._parse_workspace_list_table", return_value={})
     @patch("multica_template.create_workspace", return_value="new-id")
@@ -438,10 +458,59 @@ class TestResolveWorkspaceSimple(unittest.TestCase):
         args = FakeArgs()
         self.assertEqual(mt.resolve_workspace_simple(args), "env")
 
-    def test_fallback_none(self):
-        args = FakeArgs()
+    def test_fallback_none_with_yes(self):
+        args = FakeArgs(yes=True)
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(mt.resolve_workspace_simple(args))
+
+    @patch("multica_template._is_interactive", return_value=False)
+    def test_fallback_without_workspace_exits_in_non_interactive(self, mock_interactive):
+        args = FakeArgs()
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(SystemExit):
+                mt.resolve_workspace_simple(args)
+
+    @patch("multica_template._is_interactive", return_value=True)
+    @patch("multica_template._parse_workspace_list_table", return_value={"ws1": "uid1"})
+    @patch("builtins.input", return_value="1")
+    def test_interactive_prompt_selects_workspace(self, mock_input, mock_list, mock_interactive):
+        args = FakeArgs()
+        with patch.dict(os.environ, {}, clear=True):
+            result = mt.resolve_workspace_simple(args)
+        self.assertEqual(result, "uid1")
+
+
+class TestPromptWorkspaceSelection(unittest.TestCase):
+    @patch("multica_template._parse_workspace_list_table", return_value={"ws1": "uid1", "ws2": "uid2"})
+    @patch("builtins.input", return_value="1")
+    def test_selects_first_workspace(self, mock_input, mock_list):
+        result = mt._prompt_workspace_selection({"ws1": "uid1", "ws2": "uid2"})
+        self.assertEqual(result, "uid1")
+
+    @patch("multica_template._parse_workspace_list_table", return_value={"ws1": "uid1", "ws2": "uid2"})
+    @patch("builtins.input", return_value="2")
+    def test_selects_second_workspace(self, mock_input, mock_list):
+        result = mt._prompt_workspace_selection({"ws1": "uid1", "ws2": "uid2"})
+        self.assertEqual(result, "uid2")
+
+    def test_empty_workspaces_exits(self):
+        with self.assertRaises(SystemExit):
+            mt._prompt_workspace_selection({})
+
+    @patch("builtins.input", return_value="abc")
+    def test_non_numeric_choice_exits(self, mock_input):
+        with self.assertRaises(SystemExit):
+            mt._prompt_workspace_selection({"ws1": "uid1"})
+
+    @patch("builtins.input", return_value="5")
+    def test_out_of_range_choice_exits(self, mock_input):
+        with self.assertRaises(SystemExit):
+            mt._prompt_workspace_selection({"ws1": "uid1"})
+
+    @patch("builtins.input", side_effect=EOFError)
+    def test_eof_aborts(self, mock_input):
+        with self.assertRaises(SystemExit):
+            mt._prompt_workspace_selection({"ws1": "uid1"})
 
 
 class TestBuildRegistry(unittest.TestCase):

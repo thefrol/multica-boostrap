@@ -61,13 +61,21 @@ def load_template(directory):
 
 ## Step 0 — Resolve Target Workspace
 
-**Input:** CLI args (`--workspace-id`, `--workspace-name`, `--create-workspace`) + parsed template.
+**Input:** CLI args (`--workspace-id`, `--workspace-name`, `--create-workspace`, `--yes`) + parsed template.
 **Output:** A workspace UUID (or `None` for current workspace).
 
 **Precedence:**
 ```
---workspace-id > --workspace-name > spec.targetWorkspace.id > spec.targetWorkspace.name > current workspace
+--workspace-id > --workspace-name > spec.targetWorkspace.id > spec.targetWorkspace.name > MULTICA_WORKSPACE_ID env var > interactive prompt > current workspace (with --yes)
 ```
+
+**Interactive selection:**
+When no workspace is specified and stdin is a TTY, the engine lists available
+workspaces and prompts the user to pick one. This prevents accidental applies
+to the wrong workspace.
+
+Use `--yes` (or `-y`) to skip the prompt and accept the current default
+workspace (useful for CI pipelines and scripts).
 
 **Name resolution:**
 ```bash
