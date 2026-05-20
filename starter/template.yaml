@@ -1,0 +1,60 @@
+apiVersion: multica.template/v1
+kind: WorkspaceTemplate
+metadata:
+  name: starter
+  description: "Minimal starter template for a new Multica workspace"
+spec:
+  targetWorkspace:
+    name: "{{ .Values.workspaceName }}"
+    create: true
+
+  workspace:
+    name: "{{ .Values.workspaceName }}"
+    description: "{{ .Values.workspaceDescription }}"
+    issuePrefix: "{{ .Values.issuePrefix }}"
+
+  labels:
+    - name: bug
+      color: "#ef4444"
+    - name: feature
+      color: "#22c55e"
+    - name: docs
+      color: "#3b82f6"
+    - name: fast-path
+      color: "#a855f7"
+
+  skills:
+    - name: getting-started
+      description: "Basic guidance for new agents in this workspace"
+      files:
+        - path: SKILL.md
+          content: |
+            # Getting Started
+
+            You are an autonomous coding agent in a Multica workspace.
+
+            ## Rules
+            - Write clean, tested code.
+            - Always commit your changes.
+            - Follow the project's coding style and conventions.
+            - If unsure, ask for clarification rather than guessing.
+
+            ## Workflow
+            1. Read the issue and any comments carefully.
+            2. Explore the codebase before making changes.
+            3. Make minimal, focused changes.
+            4. Test your changes if tests exist.
+            5. Report the outcome in a comment.
+
+  agents:
+    - name: auto-coder
+      description: "Autonomous coding agent"
+      runtimeId: "{{ .Values.agentRuntimeId }}"
+      model: "{{ .Values.agentModel }}"
+      instructions: |
+        You are an autonomous coding agent. Write clean, tested code.
+        Always commit your changes. Follow the workspace conventions.
+      visibility: workspace
+      maxConcurrentTasks: 3
+      skills:
+        - getting-started

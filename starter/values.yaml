@@ -1,0 +1,5 @@
+workspaceName: "My Team"
+workspaceDescription: "A new workspace provisioned from the starter template"
+issuePrefix: "PROJ"
+agentRuntimeId: "91a7efd7-9b8a-4818-94b9-6e3451e32826"
+agentModel: "gpt-4o"
