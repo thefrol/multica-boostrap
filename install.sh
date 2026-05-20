@@ -248,6 +248,7 @@ echo "  Quick start:"
 echo "    ${SCRIPT_NAME} apply ./examples/basic-workspace"
 echo "    ${SCRIPT_NAME} dump ./exported-template"
 echo "    ${SCRIPT_NAME} clone --from-name \"Source\" --to-name \"Target\" --create-workspace"
+echo "    ${SCRIPT_NAME} update"
 echo ""
 
 if [[ "$SYSTEM_INSTALL" != true ]]; then

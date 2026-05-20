@@ -57,6 +57,11 @@ multica-template dump ./exported-template --workspace-name "Team Alpha"
 # Clone one workspace to another
 multica-template clone --from-name "Source Workspace" --to-name "New Workspace" --create-workspace
 multica-template clone --from-id <uuid> --to-id <uuid> --dry-run
+
+# Update multica-template to the latest version
+multica-template update
+multica-template update --dry-run
+multica-template update --check-only
 ```
 
 ## How It Works

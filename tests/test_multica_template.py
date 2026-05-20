@@ -1471,5 +1471,82 @@ class TestCheckMulticaVersion(unittest.TestCase):
         self.assertIn("WARNING", stderr.getvalue())
 
 
+class TestExtractVersionFromScript(unittest.TestCase):
+    def test_extracts_version(self):
+        content = 'VERSION = "1.2.3"\nother = "stuff"'
+        self.assertEqual(mt._extract_version_from_script(content), "1.2.3")
+
+    def test_extracts_version_with_v_prefix(self):
+        content = 'VERSION = "v1.2.3"\nother = "stuff"'
+        self.assertEqual(mt._extract_version_from_script(content), "v1.2.3")
+
+    def test_returns_none_when_missing(self):
+        content = 'other = "stuff"'
+        self.assertIsNone(mt._extract_version_from_script(content))
+
+
+class TestUpdateCommand(unittest.TestCase):
+    @patch("multica_template.urllib.request.urlopen")
+    def test_up_to_date(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'VERSION = "0.0.1"\n'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        args = FakeArgs(dry_run=False, check_only=False, force=False)
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            with patch.object(sys, "exit") as mock_exit:
+                mt.cmd_update(args)
+        mock_exit.assert_not_called()
+        self.assertIn("already on the latest version", stdout.getvalue())
+
+    @patch("multica_template.urllib.request.urlopen")
+    def test_update_available_check_only(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'VERSION = "9.9.9"\n'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        args = FakeArgs(dry_run=False, check_only=True, force=False)
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            with patch.object(sys, "exit") as mock_exit:
+                mt.cmd_update(args)
+        mock_exit.assert_not_called()
+        self.assertIn("Update available", stdout.getvalue())
+
+    @patch("multica_template.urllib.request.urlopen")
+    def test_dry_run(self, mock_urlopen):
+        args = FakeArgs(dry_run=True, check_only=False, force=False)
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            with patch.object(sys, "exit") as mock_exit:
+                mt.cmd_update(args)
+        mock_exit.assert_not_called()
+        self.assertIn("[dry-run]", stdout.getvalue())
+
+    @patch("multica_template.urllib.request.urlopen")
+    def test_force_reinstall(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'VERSION = "0.0.1"\n'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        args = FakeArgs(dry_run=False, check_only=False, force=True)
+        with patch("builtins.open", MagicMock()):
+            with patch("os.chmod"):
+                with patch("sys.stdout", new_callable=StringIO) as stdout:
+                    with patch.object(sys, "exit") as mock_exit:
+                        mt.cmd_update(args)
+        mock_exit.assert_not_called()
+        self.assertIn("Updated to version", stdout.getvalue())
+
+    @patch("multica_template.urllib.request.urlopen")
+    def test_fetch_failure(self, mock_urlopen):
+        mock_urlopen.side_effect = Exception("network error")
+
+        args = FakeArgs(dry_run=False, check_only=False, force=False)
+        with patch("sys.stderr", new_callable=StringIO) as stderr:
+            with self.assertRaises(SystemExit) as cm:
+                mt.cmd_update(args)
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("Failed to fetch", stderr.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

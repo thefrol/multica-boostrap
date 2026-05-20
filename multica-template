@@ -6,13 +6,26 @@ Subcommands:
     apply   Apply a workspace template
     dump    Export a workspace to a declarative template
     clone   Copy one workspace to another (dump + apply)
+    update  Update multica-template to the latest version
 
 Usage:
     multica-template apply ./examples/basic-workspace
     multica-template apply ./examples/agent-fleet --dry-run
     multica-template dump ./exported-template
     multica-template clone --from-id <uuid> --to-name "New Team" --create-workspace
+    multica-template update
+    multica-template update --dry-run
 """
+
+# ---------------------------------------------------------------------------
+# Version
+# ---------------------------------------------------------------------------
+
+VERSION = "0.1.0"
+UPDATE_REPO = "thefrol/multica-boostrap"
+UPDATE_BRANCH = "main"
+UPDATE_SCRIPT_NAME = "multica-template"
+UPDATE_RAW_URL = f"https://raw.githubusercontent.com/{UPDATE_REPO}/{UPDATE_BRANCH}/{UPDATE_SCRIPT_NAME}"
 
 import argparse
 import atexit
@@ -1731,6 +1744,63 @@ def cmd_clone(args):
     print("\nDone.")
 
 
+def _extract_version_from_script(script_content):
+    """Extract the VERSION string from multica-template script content."""
+    match = re.search(r'^VERSION\s*=\s*"([^"]+)"', script_content, re.MULTILINE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def cmd_update(args):
+    """Update multica-template to the latest version from the repository."""
+    current_path = os.path.abspath(sys.argv[0])
+    print(f"Current version: {VERSION}")
+    print(f"Checking for updates from {UPDATE_REPO} ({UPDATE_BRANCH})...")
+
+    if args.dry_run:
+        print(f"[dry-run] Would fetch: {UPDATE_RAW_URL}")
+        print(f"[dry-run] Would compare version with {VERSION}")
+        print(f"[dry-run] Would replace: {current_path}")
+        return
+
+    try:
+        with urllib.request.urlopen(UPDATE_RAW_URL, timeout=30) as response:
+            latest_content = response.read().decode("utf-8")
+    except Exception as e:
+        print(f"ERROR: Failed to fetch latest version: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    latest_version = _extract_version_from_script(latest_content)
+    if not latest_version:
+        print("ERROR: Could not determine latest version from remote script.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Latest version:  {latest_version}")
+
+    current_parsed = _parse_version(VERSION)
+    latest_parsed = _parse_version(latest_version)
+
+    if not args.force and current_parsed >= latest_parsed:
+        print("You are already on the latest version.")
+        return
+
+    if args.check_only:
+        print("Update available! Run without --check-only to install.")
+        return
+
+    # Write the new script
+    try:
+        with open(current_path, "w", encoding="utf-8") as f:
+            f.write(latest_content)
+        os.chmod(current_path, 0o755)
+    except Exception as e:
+        print(f"ERROR: Failed to write updated script: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Updated to version {latest_version}.")
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1820,6 +1890,19 @@ def main():
     clone_parser.add_argument("--create-workspace", action="store_true", help="Create the target workspace if it does not exist")
     clone_parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
     clone_parser.set_defaults(func=cmd_clone)
+
+    # ------------------------------------------------------------------
+    # update
+    # ------------------------------------------------------------------
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Update multica-template to the latest version",
+        description="Check for and install the latest multica-template release from the repository.",
+    )
+    update_parser.add_argument("--dry-run", action="store_true", help="Print what would be done without making changes")
+    update_parser.add_argument("--check-only", action="store_true", help="Check for updates but do not install")
+    update_parser.add_argument("--force", action="store_true", help="Reinstall even if already on the latest version")
+    update_parser.set_defaults(func=cmd_update)
 
     args = parser.parse_args()
     args.func(args)
