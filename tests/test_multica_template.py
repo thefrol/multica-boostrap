@@ -7,6 +7,7 @@ Run with:
     python3 tests/test_multica_template.py -v
 """
 
+import datetime
 import importlib.util
 import json
 import os
@@ -1062,6 +1063,90 @@ class TestRuntimeResolution(unittest.TestCase):
     def test_no_runtime_exits(self):
         with self.assertRaises(SystemExit):
             mt._resolve_runtime_id({"name": "ag1"}, [])
+
+    def test_fallback_picks_online_over_offline(self):
+        runtimes = [
+            {"id": "r1", "name": "offline", "status": "offline"},
+            {"id": "r2", "name": "online", "status": "online"},
+        ]
+        agent = {"name": "ag1"}
+        self.assertEqual(mt._resolve_runtime_id(agent, runtimes), "r2")
+
+    def test_fallback_picks_most_recent_when_both_online(self):
+        runtimes = [
+            {
+                "id": "r1",
+                "name": "older",
+                "status": "online",
+                "last_seen_at": "2026-05-20T10:00:00Z",
+            },
+            {
+                "id": "r2",
+                "name": "newer",
+                "status": "online",
+                "last_seen_at": "2026-05-20T12:00:00Z",
+            },
+        ]
+        agent = {"name": "ag1"}
+        self.assertEqual(mt._resolve_runtime_id(agent, runtimes), "r2")
+
+    def test_fallback_picks_any_online_over_recent_offline(self):
+        runtimes = [
+            {
+                "id": "r1",
+                "name": "recent_offline",
+                "status": "offline",
+                "last_seen_at": "2026-05-20T12:00:00Z",
+            },
+            {
+                "id": "r2",
+                "name": "old_online",
+                "status": "online",
+                "last_seen_at": "2026-05-19T10:00:00Z",
+            },
+        ]
+        agent = {"name": "ag1"}
+        self.assertEqual(mt._resolve_runtime_id(agent, runtimes), "r2")
+
+
+class TestPickBestRuntime(unittest.TestCase):
+    def test_empty_list(self):
+        self.assertIsNone(mt._pick_best_runtime([]))
+
+    def test_single_runtime(self):
+        runtimes = [{"id": "r1", "name": "rt1"}]
+        self.assertEqual(mt._pick_best_runtime(runtimes), runtimes[0])
+
+    def test_prefers_online(self):
+        offline = {"id": "r1", "name": "offline", "status": "offline"}
+        online = {"id": "r2", "name": "online", "status": "online"}
+        self.assertEqual(mt._pick_best_runtime([offline, online]), online)
+        self.assertEqual(mt._pick_best_runtime([online, offline]), online)
+
+    def test_prefers_recent_when_same_status(self):
+        old = {"id": "r1", "name": "old", "status": "online", "last_seen_at": "2026-05-20T10:00:00Z"}
+        new = {"id": "r2", "name": "new", "status": "online", "last_seen_at": "2026-05-20T12:00:00Z"}
+        self.assertEqual(mt._pick_best_runtime([old, new]), new)
+        self.assertEqual(mt._pick_best_runtime([new, old]), new)
+
+
+class TestScoreRuntime(unittest.TestCase):
+    def test_online_scores_higher_than_offline(self):
+        online = {"id": "r1", "status": "online"}
+        offline = {"id": "r2", "status": "offline"}
+        self.assertGreater(mt._score_runtime(online), mt._score_runtime(offline))
+
+    def test_recent_scores_higher_than_old(self):
+        recent = {"id": "r1", "status": "online", "last_seen_at": "2026-05-20T12:00:00Z"}
+        old = {"id": "r2", "status": "online", "last_seen_at": "2026-05-19T10:00:00Z"}
+        self.assertGreater(mt._score_runtime(recent), mt._score_runtime(old))
+
+    def test_missing_last_seen_defaults_to_epoch(self):
+        rt = {"id": "r1", "status": "online"}
+        score = mt._score_runtime(rt)
+        # Should still be a valid tuple
+        self.assertEqual(score[0], 1)
+        self.assertIsInstance(score[1], datetime.datetime)
 
 
 class TestDryRun(unittest.TestCase):

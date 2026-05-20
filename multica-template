@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from datetime import datetime, timezone
 
 import yaml
 
@@ -870,8 +871,43 @@ def _runtime_label(runtime):
     return " ".join(parts)
 
 
+def _parse_last_seen(runtime):
+    """Return a datetime for the runtime's last_seen_at, or epoch if missing/invalid."""
+    raw = runtime.get("last_seen_at")
+    if not raw:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        # ISO 8601 with 'Z' or offset
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        return datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _score_runtime(runtime):
+    """Return a sortable tuple where higher = better runtime.
+
+    Scoring:
+      1. online status (online = 1, anything else = 0)
+      2. most recent last_seen_at
+    """
+    status = runtime.get("status", "").lower()
+    is_online = 1 if status == "online" else 0
+    last_seen = _parse_last_seen(runtime)
+    return (is_online, last_seen)
+
+
+def _pick_best_runtime(available_runtimes):
+    """Return the best runtime from the list based on availability and recency."""
+    if not available_runtimes:
+        return None
+    # Sort by score descending, pick the best
+    return max(available_runtimes, key=_score_runtime)
+
+
 def _resolve_runtime_id(agent, available_runtimes):
-    """Validate agent runtimeId and fall back to first available if invalid."""
+    """Validate agent runtimeId and fall back to the best available if invalid."""
     name = agent["name"]
     requested = agent.get("runtimeId")
 
@@ -880,9 +916,10 @@ def _resolve_runtime_id(agent, available_runtimes):
     if requested and requested in runtime_by_id:
         return requested
 
-    if available_runtimes:
-        fallback = available_runtimes[0].get("id")
-        fallback_label = _runtime_label(available_runtimes[0])
+    best = _pick_best_runtime(available_runtimes)
+    if best:
+        fallback = best.get("id")
+        fallback_label = _runtime_label(best)
         if requested:
             print(
                 f"[agent] {name} — WARNING: runtimeId {requested!r} not found in target workspace, falling back to {fallback!r} ({fallback_label})",
