@@ -398,6 +398,51 @@ def _parse_workspace_list_table():
     return workspaces
 
 
+def _is_interactive():
+    """Return True if stdin is a TTY (interactive terminal)."""
+    return sys.stdin.isatty()
+
+
+def _prompt_workspace_selection(workspaces, prompt_text="Select target workspace"):
+    """Prompt the user to select a workspace from a name->id mapping.
+
+    Returns the selected workspace ID, or exits on invalid input.
+    """
+    if not workspaces:
+        print(
+            "ERROR: No workspaces available. "
+            "Create one via the web UI or use --create-workspace.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    names = sorted(workspaces.keys())
+    print(f"\n{prompt_text}:")
+    for i, name in enumerate(names, start=1):
+        print(f"  {i}. {name}")
+    print()
+
+    try:
+        choice = input("Enter number (or press Ctrl+C to cancel): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nAborted.", file=sys.stderr)
+        sys.exit(130)
+
+    if not choice.isdigit():
+        print(f'ERROR: Invalid choice "{choice}". Enter a number.', file=sys.stderr)
+        sys.exit(1)
+
+    idx = int(choice)
+    if idx < 1 or idx > len(names):
+        print(f"ERROR: Choice {idx} is out of range.", file=sys.stderr)
+        sys.exit(1)
+
+    selected_name = names[idx - 1]
+    selected_id = workspaces[selected_name]
+    print(f'  → {selected_name} ({selected_id})\n')
+    return selected_id
+
+
 def _slugify(name):
     """Convert a workspace name to a URL-safe slug."""
     slug = name.lower()
@@ -701,8 +746,26 @@ def resolve_workspace(args, template=None, dry_run=False):
     if env_ws:
         return env_ws
 
-    # None means "use the current workspace" (multica CLI default)
-    return None
+    # If --yes was passed, fall back to the current workspace silently
+    # (backward compatibility for CI/scripts).
+    if getattr(args, "yes", False):
+        return None
+
+    # Interactive terminal: let the user pick explicitly so they never
+    # accidentally apply to the wrong workspace.
+    if _is_interactive():
+        workspaces = _parse_workspace_list_table()
+        return _prompt_workspace_selection(workspaces, prompt_text="Select target workspace")
+
+    # Non-interactive and no workspace specified: fail fast with a clear message.
+    print(
+        "ERROR: No target workspace specified. "
+        "Use --workspace-id, --workspace-name, MULTICA_WORKSPACE_ID, "
+        "or run interactively to select one. "
+        "Use --yes to accept the current default workspace.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def resolve_workspace_simple(args):
@@ -725,7 +788,24 @@ def resolve_workspace_simple(args):
     if env_ws:
         return env_ws
 
-    return None
+    # If --yes was passed, fall back to the current workspace silently.
+    if getattr(args, "yes", False):
+        return None
+
+    # Interactive terminal: let the user pick explicitly.
+    if _is_interactive():
+        workspaces = _parse_workspace_list_table()
+        return _prompt_workspace_selection(workspaces, prompt_text="Select source workspace")
+
+    # Non-interactive and no workspace specified: fail fast.
+    print(
+        "ERROR: No source workspace specified. "
+        "Use --workspace-id, --workspace-name, MULTICA_WORKSPACE_ID, "
+        "or run interactively to select one. "
+        "Use --yes to accept the current default workspace.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1901,6 +1981,11 @@ def main():
     apply_parser.add_argument("--workspace-name", help="Resolve workspace name to ID and apply there")
     apply_parser.add_argument("--create-workspace", action="store_true", help="Create the target workspace if it does not exist")
     apply_parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Skip interactive workspace prompt and use the current default workspace",
+    )
+    apply_parser.add_argument(
         "--ref",
         dest="ref",
         help="Git ref (branch or tag) to checkout when using a GitHub source",
@@ -1936,6 +2021,11 @@ def main():
     dump_parser.add_argument("--workspace-id", help="Dump from an explicit workspace UUID")
     dump_parser.add_argument("--workspace-name", help="Resolve workspace name to ID and dump from there")
     dump_parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Skip interactive workspace prompt and use the current default workspace",
+    )
+    dump_parser.add_argument(
         "--env-file",
         dest="env_file",
         help="Extract agent customEnv values to a .env file and use {{ .Env.VARNAME }} placeholders in template.yaml",
@@ -1956,6 +2046,11 @@ def main():
     clone_parser.add_argument("--to-name", help="Target workspace name")
     clone_parser.add_argument("--create-workspace", action="store_true", help="Create the target workspace if it does not exist")
     clone_parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    clone_parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Skip interactive workspace prompt and use the current default workspace",
+    )
     clone_parser.set_defaults(func=cmd_clone)
 
     # ------------------------------------------------------------------
