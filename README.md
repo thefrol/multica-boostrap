@@ -64,6 +64,25 @@ multica-template update --dry-run
 multica-template update --check-only
 ```
 
+## Default Template Paths
+
+When you run `multica-template apply` without specifying a source directory, the
+tool automatically searches for `template.yaml` in the following default paths
+(in order):
+
+1. `.multica-workspace/`
+2. `.multica-bootstrap/`
+3. `.agents/multica-workspace/`
+4. `.agents/multica-bootstrap/`
+
+This lets you keep your Multica team configuration right next to your source code
+— version-controlled, governed, and discoverable with a single command:
+
+```bash
+# Runs apply against the first matching default path
+multica-template apply
+```
+
 ## How It Works
 
 1. **Author** a `template.yaml` that describes your desired workspace state.

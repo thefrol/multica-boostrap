@@ -27,6 +27,17 @@ UPDATE_BRANCH = "main"
 UPDATE_SCRIPT_NAME = "multica-template"
 UPDATE_RAW_URL = f"https://raw.githubusercontent.com/{UPDATE_REPO}/{UPDATE_BRANCH}/{UPDATE_SCRIPT_NAME}"
 
+# ---------------------------------------------------------------------------
+# Default template discovery paths
+# ---------------------------------------------------------------------------
+
+DEFAULT_TEMPLATE_PATHS = [
+    ".multica-workspace",
+    ".multica-bootstrap",
+    ".agents/multica-workspace",
+    ".agents/multica-bootstrap",
+]
+
 import argparse
 import atexit
 import json
@@ -1619,12 +1630,36 @@ def write_template(template, output_dir):
     return path
 
 
+def _find_default_template_path():
+    """Search DEFAULT_TEMPLATE_PATHS for a directory containing template.yaml.
+
+    Returns the first matching directory path, or None if none found.
+    """
+    for rel_path in DEFAULT_TEMPLATE_PATHS:
+        if os.path.isdir(rel_path):
+            candidate = os.path.join(rel_path, "template.yaml")
+            if os.path.isfile(candidate):
+                return rel_path
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Subcommand: apply
 # ---------------------------------------------------------------------------
 
 def cmd_apply(args):
     source = args.source
+    if source is None:
+        source = _find_default_template_path()
+        if source is None:
+            searched = ", ".join(DEFAULT_TEMPLATE_PATHS)
+            print(
+                f"ERROR: No template source provided and no default template found. "
+                f"Searched: {searched}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"Using default template: {source}")
     tmpdir = None
 
     def _cleanup_tmpdir():
@@ -1891,9 +1926,13 @@ def main():
     )
     apply_parser.add_argument(
         "source",
+        nargs="?",
+        default=None,
         help=(
             "Path to directory containing template.yaml, "
-            "or a GitHub repo reference such as github.com/owner/repo"
+            "or a GitHub repo reference such as github.com/owner/repo. "
+            "If omitted, searches default paths: "
+            ", ".join(DEFAULT_TEMPLATE_PATHS)
         ),
     )
     apply_parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")

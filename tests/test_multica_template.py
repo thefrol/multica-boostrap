@@ -11,6 +11,7 @@ import datetime
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1674,6 +1675,136 @@ class TestUpdateCommand(unittest.TestCase):
                 mt.cmd_update(args)
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("Failed to fetch", stderr.getvalue())
+
+
+class TestFindDefaultTemplatePath(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_no_defaults_exist(self):
+        self.assertIsNone(mt._find_default_template_path())
+
+    def test_first_default_found(self):
+        os.makedirs(".multica-workspace")
+        with open(".multica-workspace/template.yaml", "w") as f:
+            f.write("apiVersion: multica.template/v1\n")
+        self.assertEqual(mt._find_default_template_path(), ".multica-workspace")
+
+    def test_second_default_found(self):
+        os.makedirs(".multica-bootstrap")
+        with open(".multica-bootstrap/template.yaml", "w") as f:
+            f.write("apiVersion: multica.template/v1\n")
+        self.assertEqual(mt._find_default_template_path(), ".multica-bootstrap")
+
+    def test_nested_default_found(self):
+        os.makedirs(".agents/multica-workspace")
+        with open(".agents/multica-workspace/template.yaml", "w") as f:
+            f.write("apiVersion: multica.template/v1\n")
+        self.assertEqual(mt._find_default_template_path(), ".agents/multica-workspace")
+
+    def test_directory_without_template_yaml_ignored(self):
+        os.makedirs(".multica-workspace")
+        # No template.yaml inside
+        os.makedirs(".multica-bootstrap")
+        with open(".multica-bootstrap/template.yaml", "w") as f:
+            f.write("apiVersion: multica.template/v1\n")
+        self.assertEqual(mt._find_default_template_path(), ".multica-bootstrap")
+
+
+class TestApplyDefaultPath(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("multica_template.build_registry")
+    @patch("multica_template.apply_autopilots")
+    @patch("multica_template.apply_squads")
+    @patch("multica_template.apply_agents")
+    @patch("multica_template.apply_skills")
+    @patch("multica_template.apply_labels")
+    @patch("multica_template.apply_workspace")
+    @patch("multica_template.resolve_workspace")
+    @patch("multica_template.load_template")
+    def test_apply_uses_default_path_when_source_is_none(
+        self,
+        mock_load_template,
+        mock_resolve_workspace,
+        mock_apply_workspace,
+        mock_apply_labels,
+        mock_apply_skills,
+        mock_apply_agents,
+        mock_apply_squads,
+        mock_apply_autopilots,
+        mock_build_registry,
+    ):
+        os.makedirs(".multica-workspace")
+        template_path = os.path.join(".multica-workspace", "template.yaml")
+        with open(template_path, "w") as f:
+            f.write("apiVersion: multica.template/v1\nkind: WorkspaceTemplate\nmetadata:\n  name: test\nspec:\n  workspace:\n    name: Test\n")
+
+        mock_load_template.return_value = {
+            "apiVersion": "multica.template/v1",
+            "kind": "WorkspaceTemplate",
+            "metadata": {"name": "test"},
+            "spec": {"workspace": {"name": "Test"}},
+        }
+        mock_resolve_workspace.return_value = None
+        mock_build_registry.return_value = {}
+
+        args = FakeArgs(
+            source=None,
+            dry_run=True,
+            workspace_id=None,
+            workspace_name=None,
+            create_workspace=False,
+            ref=None,
+            values=None,
+            set=None,
+            env_file=None,
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            mt.cmd_apply(args)
+
+        output = stdout.getvalue()
+        self.assertIn("Using default template: .multica-workspace", output)
+        mock_load_template.assert_called_once()
+        # Verify load_template was called with the default path
+        call_args = mock_load_template.call_args
+        self.assertEqual(call_args[0][0], ".multica-workspace")
+
+    @patch("multica_template.load_template")
+    def test_apply_exits_when_no_default_found(self, mock_load_template):
+        args = FakeArgs(
+            source=None,
+            dry_run=True,
+            workspace_id=None,
+            workspace_name=None,
+            create_workspace=False,
+            ref=None,
+            values=None,
+            set=None,
+            env_file=None,
+        )
+
+        with patch("sys.stderr", new_callable=StringIO) as stderr:
+            with self.assertRaises(SystemExit) as cm:
+                mt.cmd_apply(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("No template source provided", stderr.getvalue())
+        self.assertIn(".multica-workspace", stderr.getvalue())
 
 
 if __name__ == "__main__":
