@@ -33,6 +33,19 @@ cat install.sh | less
 bash install.sh
 ```
 
+### Starter Template — The Fastest Way to Begin
+
+The [`starter/`](./starter) directory contains a minimal, self-contained template with a workspace, labels, a skill, and an agent. Copy it, customize `values.yaml`, and apply:
+
+```bash
+cp -r starter my-team
+cd my-team
+# Edit values.yaml, then:
+multica-template apply . --create-workspace
+```
+
+See [`starter/README.md`](./starter/README.md) for full details.
+
 ### Usage
 
 ```bash
